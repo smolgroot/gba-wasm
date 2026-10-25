@@ -6,7 +6,7 @@ import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './save
 
 type ActiveGame = { name: string; status: string; pixels: Uint8ClampedArray }
 const DOCS_URL = '/gba-wasm/'
-const SOURCE_URL = 'https://github.com/smolgroot/bunyip'
+const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 
 function formatSavedDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
@@ -22,12 +22,23 @@ function fileToImage(pixels: Uint8ClampedArray) {
   return canvas.toDataURL('image/png')
 }
 
+function describeError(error: unknown) {
+  if (error instanceof Error) return { message: error.message, stack: error.stack }
+  if (typeof error === 'string') return { message: error, stack: undefined }
+  try {
+    return { message: JSON.stringify(error), stack: undefined }
+  } catch {
+    return { message: String(error), stack: undefined }
+  }
+}
+
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const navigate = useNavigate()
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [savedGames, setSavedGames] = useState<SavedGame[]>([])
   const [appStatus, setAppStatus] = useState('Initializing WebAssembly')
+  const [romLoadLog, setRomLoadLog] = useState<string | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -56,10 +67,16 @@ function App() {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (!file) return
+    let stage = 'reading file'
+    let romSize = 0
     try {
       const rom = new Uint8Array(await file.arrayBuffer())
+      romSize = rom.byteLength
       const name = file.name.replace(/\.(gba|bin)$/i, '')
+      stage = 'validating and executing ROM'
+      setRomLoadLog(null)
       const pixels = await executeRom(rom, name)
+      stage = 'saving game to local library'
       const game: SavedGame = {
         id: crypto.randomUUID(),
         name,
@@ -69,9 +86,22 @@ function App() {
       }
       await saveGame(game)
       setSavedGames(await getSavedGames())
+      setRomLoadLog(null)
       navigate('/play')
     } catch (error) {
-      setAppStatus(error instanceof Error ? error.message : 'Could not load this ROM')
+      const detail = describeError(error)
+      const message = detail.message || 'Unknown error'
+      const log = [
+        `[ROM LOAD] ${new Date().toISOString()}`,
+        `file: ${file.name}`,
+        `size: ${romSize || file.size} bytes`,
+        `stage: ${stage}`,
+        `error: ${message}`,
+        ...(detail.stack ? [`stack: ${detail.stack}`] : []),
+      ].join('\n')
+      console.error('Could not load this ROM', error)
+      setRomLoadLog(log)
+      setAppStatus(message)
     }
   }
 
@@ -89,7 +119,10 @@ function App() {
     setSavedGames(await getSavedGames())
   }
 
-  const triggerLoad = () => inputRef.current?.click()
+  const triggerLoad = () => {
+    navigate('/play')
+    inputRef.current?.click()
+  }
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -109,7 +142,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
-          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} onLoad={triggerLoad} />} />
+          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} errorLog={romLoadLog} onLoad={triggerLoad} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
         </Routes>
@@ -165,7 +198,7 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
   )
 }
 
-function EmulatorPage({ game, status, onLoad }: { game: ActiveGame | null; status: string; onLoad: () => void }) {
+function EmulatorPage({ game, status, errorLog, onLoad }: { game: ActiveGame | null; status: string; errorLog: string | null; onLoad: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
@@ -177,6 +210,7 @@ function EmulatorPage({ game, status, onLoad }: { game: ActiveGame | null; statu
       <div className="empty-emulator-icon"><Gamepad2 size={30} /></div><p className="eyebrow">NO CARTRIDGE INSERTED</p>
       <h1>Ready when you are.</h1><p>Load a compatible ROM to open the emulator.</p>
       <button className="primary-button" onClick={onLoad}><ArrowDownToLine size={18} /> Load ROM</button><small>{status}</small>
+      {errorLog && <pre className="rom-error-log" aria-label="ROM load diagnostic log"><code>{errorLog}</code></pre>}
     </section>
   )
 

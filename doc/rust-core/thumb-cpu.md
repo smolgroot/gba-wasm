@@ -14,6 +14,7 @@ ARM:
 
 - conditional `B` and `BL`
 - conditional `BX`
+- conditional `MSR CPSR_<fields>, Rm` for modeled CPSR fields while remaining in System mode and the current ARM/Thumb state
 - conditional immediate `MOV`
 
 Thumb:
@@ -25,7 +26,7 @@ Thumb:
 - conditional branches for conditions EQ through LE
 - unconditional branch
 
-Unsupported instructions return the opcode and address rather than being treated as no-ops. ARM data processing beyond immediate `MOV`, most ARM loads/stores, Thumb byte transfers, register-offset transfers, interrupts, and cycle timing are not implemented.
+Unsupported instructions return the opcode and address rather than being treated as no-ops. SPSR writes and CPSR writes that change CPU mode or the T bit remain unsupported because banked registers and status restoration are not modeled. ARM data processing beyond immediate `MOV`, most ARM loads/stores, Thumb byte transfers, register-offset transfers, interrupts, and cycle timing are not implemented.
 
 The CPSR T bit selects the instruction set. ARM fetches use word-aligned addresses and Thumb fetches use halfword-aligned addresses. Architectural reads of PC use instruction address + 8 in ARM and aligned instruction address + 4 in Thumb. Unsupported-opcode errors include the execution state and leave the faulting PC and other CPU/memory state unchanged.
 

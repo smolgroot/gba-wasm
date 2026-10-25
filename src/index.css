@@ -16,6 +16,7 @@
   --violet-light: #d9b7ff;
   --orange: #e47d4e;
   --mono: 'DM Mono', monospace;
+  --pixel: 'Press Start 2P', monospace;
 }
 
 * { box-sizing: border-box; }

@@ -5,6 +5,7 @@ pub const ROM_BASE: u32 = 0x0800_0000;
 
 const CPSR_THUMB: u32 = 1 << 5;
 const CPSR_SYSTEM_MODE: u32 = 0x1F;
+const CPSR_MODE_MASK: u32 = 0x1F;
 const FLAG_N: u32 = 1 << 31;
 const FLAG_Z: u32 = 1 << 30;
 const FLAG_C: u32 = 1 << 29;
@@ -137,6 +138,45 @@ impl ThumbCpu {
                     self.cpsr &= !CPSR_THUMB;
                     self.registers[15] = target & !3;
                 }
+            }
+            return Ok(());
+        }
+
+        if opcode & 0x0FB0_FFF0 == 0x0120_F000 {
+            if self.condition_passed(condition) {
+                let writes_spsr = opcode & (1 << 22) != 0;
+                let field_mask = (opcode >> 16) & 0xF;
+                if writes_spsr || field_mask == 0 {
+                    return Err(CpuError::UnsupportedArmInstruction {
+                        address,
+                        state: ExecutionState::Arm,
+                        opcode,
+                    });
+                }
+
+                let source_register = (opcode & 0xF) as usize;
+                let value = self.read_register(source_register, ExecutionState::Arm, address);
+                let mut write_mask = 0;
+                for field in 0..4 {
+                    if field_mask & (1 << field) != 0 {
+                        write_mask |= 0xFF << (field * 8);
+                    }
+                }
+
+                let updated_cpsr = (self.cpsr & !write_mask) | (value & write_mask);
+                let control_written = field_mask & 1 != 0;
+                if control_written
+                    && (updated_cpsr & CPSR_MODE_MASK != CPSR_SYSTEM_MODE
+                        || (updated_cpsr ^ self.cpsr) & CPSR_THUMB != 0)
+                {
+                    return Err(CpuError::UnsupportedArmInstruction {
+                        address,
+                        state: ExecutionState::Arm,
+                        opcode,
+                    });
+                }
+
+                self.cpsr = (self.cpsr & !write_mask) | (value & write_mask);
             }
             return Ok(());
         }
@@ -453,6 +493,43 @@ mod tests {
         assert_eq!(cpu.registers[0], 0);
         assert_eq!(cpu.cpsr & (FLAG_N | FLAG_Z), FLAG_Z);
         assert_eq!(cpu.cpsr & (FLAG_C | FLAG_V), FLAG_C | FLAG_V);
+    }
+
+    #[test]
+    fn arm_msr_cpsr_fc_updates_control_and_flags_in_system_mode() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x00, 0xF0, 0x29, 0xE1]); // MSR CPSR_fc, r0
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = CPSR_SYSTEM_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V;
+        cpu.cpsr |= FLAG_Z;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(
+            cpu.cpsr,
+            CPSR_SYSTEM_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V
+        );
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_msr_rejects_unmodeled_mode_changes_without_mutating_cpsr() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x00, 0xF0, 0x29, 0xE1]); // MSR CPSR_fc, r0
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = 0x13 | FLAG_N;
+        let original_cpsr = cpu.cpsr;
+
+        assert!(matches!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedArmInstruction {
+                address: ROM_BASE,
+                state: ExecutionState::Arm,
+                opcode: 0xE129_F000,
+            })
+        ));
+        assert_eq!(cpu.cpsr, original_cpsr);
+        assert_eq!(cpu.registers[15], ROM_BASE);
     }
 
     #[test]
