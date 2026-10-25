@@ -1,0 +1,17 @@
+{
+  "name": "GBA WASM",
+  "short_name": "GBAWASM",
+  "description": "Retro gaming emulator shell built with Rust and WebAssembly.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

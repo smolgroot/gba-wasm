@@ -1,0 +1,44 @@
+import { defineConfig } from 'vitepress'
+
+export default defineConfig({
+  title: 'GBA WASM',
+  description: 'The official documentation for the GBA emulator on WebAssembly.',
+  lang: 'en-US',
+  base: '/gba-wasm/',
+  lastUpdated: true,
+  themeConfig: {
+    nav: [
+      { text: 'Guide', link: '/guide/introduction' },
+      { text: 'Architecture', link: '/architecture/overview' },
+      { text: 'Rust Core', link: '/rust-core/memory-map' },
+    ],
+    sidebar: [
+      {
+        text: 'Getting Started',
+        items: [
+          { text: 'Introduction', link: '/guide/introduction' },
+          { text: 'Project Goals', link: '/guide/goals' },
+          { text: 'Development Workflow', link: '/guide/workflow' },
+        ],
+      },
+      {
+        text: 'Architecture',
+        items: [
+          { text: 'Overview', link: '/architecture/overview' },
+          { text: 'Memory Model', link: '/architecture/memory-model' },
+          { text: 'GPU Pipeline', link: '/architecture/gpu-pipeline' },
+          { text: 'WASM Boundary', link: '/architecture/wasm-boundary' },
+        ],
+      },
+      {
+        text: 'Rust Core',
+        items: [
+          { text: 'Memory Map', link: '/rust-core/memory-map' },
+          { text: 'GPU Core', link: '/rust-core/gpu-core' },
+          { text: 'Testing Strategy', link: '/rust-core/testing-strategy' },
+        ],
+      },
+    ],
+    socialLinks: [{ icon: 'github', link: 'https://github.com' }],
+  },
+})

@@ -1,0 +1,38 @@
+{
+  "name": "gba-wasm",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run wasm:build && vite",
+    "build": "pnpm run wasm:build && tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "wasm:build": "wasm-pack build ./rust --target web --out-dir ../public/wasm --release"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.5.0",
+    "@mui/material": "^9.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitepress": "^1.6.4"
+  },
+  "packageManager": "pnpm@10.32.1+sha512.a706938f0e89ac1456b6563eab4edf1d1faf3368d1191fc5c59790e96dc918e4456ab2e67d613de1043d2e8c81f87303e6b40d4ffeca9df15ef1ad567348f2be"
+}
