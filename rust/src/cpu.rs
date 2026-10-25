@@ -36,6 +36,11 @@ pub enum CpuError {
         state: ExecutionState,
         opcode: u32,
     },
+    UnsupportedBiosCall {
+        address: u32,
+        state: ExecutionState,
+        service: u8,
+    },
 }
 
 impl fmt::Display for CpuError {
@@ -62,6 +67,14 @@ impl fmt::Display for CpuError {
                     "unsupported ARM opcode 0x{opcode:08X} at 0x{address:08X} in {state:?} state"
                 )
             }
+            Self::UnsupportedBiosCall {
+                address,
+                state,
+                service,
+            } => write!(
+                formatter,
+                "unsupported BIOS SWI 0x{service:02X} at 0x{address:08X} in {state:?} state"
+            ),
         }
     }
 }
@@ -212,6 +225,197 @@ impl ThumbCpu {
             return Ok(());
         }
 
+        if opcode & 0x0C00_0000 == 0 && opcode & (1 << 25) != 0 {
+            if !self.condition_passed(condition) {
+                return Ok(());
+            }
+
+            let operation = (opcode >> 21) & 0xF;
+            let set_flags = opcode & (1 << 20) != 0;
+            let destination = ((opcode >> 12) & 0xF) as usize;
+            let source_register = ((opcode >> 16) & 0xF) as usize;
+            let rotation = ((opcode >> 8) & 0xF) * 2;
+            let immediate = opcode & 0xFF;
+            let operand = immediate.rotate_right(rotation);
+            let shifter_carry = if rotation == 0 {
+                self.cpsr & FLAG_C != 0
+            } else {
+                operand & FLAG_N != 0
+            };
+            let source = self.read_register(source_register, ExecutionState::Arm, address);
+            let carry_in = u32::from(self.cpsr & FLAG_C != 0);
+            let is_test = matches!(operation, 8..=11);
+
+            if is_test && !set_flags {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+            if destination == 15 && set_flags {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            let (result, arithmetic_flags) = match operation {
+                0 => (source & operand, None),
+                1 => (source ^ operand, None),
+                2 | 10 => {
+                    let result = source.wrapping_sub(operand);
+                    (result, Some((true, source, operand, 0)))
+                }
+                3 => {
+                    let result = operand.wrapping_sub(source);
+                    (result, Some((true, operand, source, 0)))
+                }
+                4 | 11 => {
+                    let result = source.wrapping_add(operand);
+                    (result, Some((false, source, operand, 0)))
+                }
+                5 => {
+                    let result = source.wrapping_add(operand).wrapping_add(carry_in);
+                    (result, Some((false, source, operand, carry_in)))
+                }
+                6 => {
+                    let borrow = 1 - carry_in;
+                    let result = source.wrapping_sub(operand).wrapping_sub(borrow);
+                    (result, Some((true, source, operand, borrow)))
+                }
+                7 => {
+                    let borrow = 1 - carry_in;
+                    let result = operand.wrapping_sub(source).wrapping_sub(borrow);
+                    (result, Some((true, operand, source, borrow)))
+                }
+                8 => (source & operand, None),
+                9 => (source ^ operand, None),
+                12 => (source | operand, None),
+                13 => (operand, None),
+                14 => (source & !operand, None),
+                15 => (!operand, None),
+                _ => unreachable!(),
+            };
+
+            if set_flags {
+                if let Some((subtract, left, right, adjustment)) = arithmetic_flags {
+                    self.set_arithmetic_flags(subtract, left, right, adjustment, result);
+                } else {
+                    self.set_nz(result);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if shifter_carry { FLAG_C } else { 0 };
+                }
+            }
+
+            if !is_test {
+                if destination == 15 {
+                    self.registers[15] = result & !3;
+                } else {
+                    self.registers[destination] = result;
+                }
+            }
+            return Ok(());
+        }
+
+        if opcode & 0x0C00_0000 == 0 && opcode & (1 << 25) == 0 {
+            if !self.condition_passed(condition) {
+                return Ok(());
+            }
+            if opcode & (1 << 4) != 0 {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            let operation = (opcode >> 21) & 0xF;
+            let set_flags = opcode & (1 << 20) != 0;
+            let destination = ((opcode >> 12) & 0xF) as usize;
+            let source_register = ((opcode >> 16) & 0xF) as usize;
+            let value_register = (opcode & 0xF) as usize;
+            let shift_type = (opcode >> 5) & 0x3;
+            let shift_amount = (opcode >> 7) & 0x1F;
+            let value = self.read_register(value_register, ExecutionState::Arm, address);
+            let source = self.read_register(source_register, ExecutionState::Arm, address);
+            let (operand, shifter_carry) =
+                shift_immediate(value, shift_type, shift_amount, self.cpsr & FLAG_C != 0);
+            let carry_in = u32::from(self.cpsr & FLAG_C != 0);
+            let is_test = matches!(operation, 8..=11);
+
+            if is_test && !set_flags {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+            if destination == 15 && set_flags {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            let (result, arithmetic_flags) = match operation {
+                0 => (source & operand, None),
+                1 => (source ^ operand, None),
+                2 | 10 => {
+                    let result = source.wrapping_sub(operand);
+                    (result, Some((true, source, operand, 0)))
+                }
+                3 => {
+                    let result = operand.wrapping_sub(source);
+                    (result, Some((true, operand, source, 0)))
+                }
+                4 | 11 => {
+                    let result = source.wrapping_add(operand);
+                    (result, Some((false, source, operand, 0)))
+                }
+                5 => {
+                    let result = source.wrapping_add(operand).wrapping_add(carry_in);
+                    (result, Some((false, source, operand, carry_in)))
+                }
+                6 => {
+                    let borrow = 1 - carry_in;
+                    let result = source.wrapping_sub(operand).wrapping_sub(borrow);
+                    (result, Some((true, source, operand, borrow)))
+                }
+                7 => {
+                    let borrow = 1 - carry_in;
+                    let result = operand.wrapping_sub(source).wrapping_sub(borrow);
+                    (result, Some((true, operand, source, borrow)))
+                }
+                8 => (source & operand, None),
+                9 => (source ^ operand, None),
+                12 => (source | operand, None),
+                13 => (operand, None),
+                14 => (source & !operand, None),
+                15 => (!operand, None),
+                _ => unreachable!(),
+            };
+
+            if set_flags {
+                if let Some((subtract, left, right, adjustment)) = arithmetic_flags {
+                    self.set_arithmetic_flags(subtract, left, right, adjustment, result);
+                } else {
+                    self.set_nz(result);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if shifter_carry { FLAG_C } else { 0 };
+                }
+            }
+
+            if !is_test {
+                if destination == 15 {
+                    self.registers[15] = result & !3;
+                } else {
+                    self.registers[destination] = result;
+                }
+            }
+            return Ok(());
+        }
+
         if opcode & 0x0C00_0000 == 0x0400_0000 {
             if !self.condition_passed(condition) {
                 return Ok(());
@@ -293,20 +497,6 @@ impl ThumbCpu {
             return Ok(());
         }
 
-        if opcode & 0x0FE0_0000 == 0x03A0_0000 {
-            if self.condition_passed(condition) {
-                let destination = ((opcode >> 12) & 0xF) as usize;
-                let immediate = opcode & 0xFF;
-                let rotation = ((opcode >> 8) & 0xF) * 2;
-                let value = immediate.rotate_right(rotation);
-                self.registers[destination] = value;
-                if opcode & (1 << 20) != 0 {
-                    self.set_nz(value);
-                }
-            }
-            return Ok(());
-        }
-
         Err(CpuError::UnsupportedArmInstruction {
             address,
             state: ExecutionState::Arm,
@@ -324,6 +514,54 @@ impl ThumbCpu {
             let value = u32::from(opcode & 0x00FF);
             self.registers[destination] = value;
             self.set_nz(value);
+            return Ok(());
+        }
+
+        if opcode & 0xF800 == 0x2800 {
+            let source = self.registers[usize::from((opcode >> 8) & 0x7)];
+            let immediate = u32::from(opcode & 0x00FF);
+            self.set_sub_flags(source, immediate, source.wrapping_sub(immediate));
+            return Ok(());
+        }
+
+        if matches!(opcode & 0xF800, 0x0000 | 0x0800 | 0x1000) {
+            let shift_type = u32::from((opcode >> 11) & 0x3);
+            let amount = u32::from((opcode >> 6) & 0x1F);
+            let source = usize::from((opcode >> 3) & 0x7);
+            let destination = usize::from(opcode & 0x7);
+            let (result, carry) = shift_immediate(
+                self.registers[source],
+                shift_type,
+                amount,
+                self.cpsr & FLAG_C != 0,
+            );
+            self.registers[destination] = result;
+            self.set_nz(result);
+            self.cpsr = (self.cpsr & !FLAG_C) | if carry { FLAG_C } else { 0 };
+            return Ok(());
+        }
+
+        if opcode & 0xF800 == 0x1800 {
+            let subtract = opcode & 0x0200 != 0;
+            let immediate_operand = opcode & 0x0400 != 0;
+            let operand = if immediate_operand {
+                u32::from((opcode >> 6) & 0x7)
+            } else {
+                self.registers[usize::from((opcode >> 6) & 0x7)]
+            };
+            let source = self.registers[usize::from((opcode >> 3) & 0x7)];
+            let destination = usize::from(opcode & 0x7);
+            let result = if subtract {
+                let value = source.wrapping_sub(operand);
+                self.set_sub_flags(source, operand, value);
+                value
+            } else {
+                let wide_result = u64::from(source) + u64::from(operand);
+                let value = wide_result as u32;
+                self.set_add_flags(source, operand, value, wide_result > u64::from(u32::MAX));
+                value
+            };
+            self.registers[destination] = result;
             return Ok(());
         }
 
@@ -353,7 +591,112 @@ impl ThumbCpu {
             return Ok(());
         }
 
-        if opcode & 0xF000 == 0x6000 {
+        if opcode & 0xF000 == 0x9000 {
+            let load = opcode & 0x0800 != 0;
+            let destination = usize::from((opcode >> 8) & 0x7);
+            let offset = u32::from(opcode & 0x00FF) * 4;
+            let transfer_address = self.registers[13].wrapping_add(offset);
+            if load {
+                self.registers[destination] = memory.read_u32(transfer_address & !3);
+            } else {
+                memory.write_u32(transfer_address & !3, self.registers[destination]);
+            }
+            return Ok(());
+        }
+
+        if opcode & 0xFE00 == 0xB400 {
+            let registers = u32::from(opcode & 0x00FF);
+            let include_lr = opcode & 0x0100 != 0;
+            let register_count = registers.count_ones() + u32::from(include_lr);
+            if register_count == 0 {
+                return Err(CpuError::UnsupportedInstruction {
+                    address,
+                    state: ExecutionState::Thumb,
+                    opcode,
+                });
+            }
+            let new_stack = self.registers[13].wrapping_sub(register_count * 4);
+            let mut address = new_stack;
+
+            for register in 0..8 {
+                if registers & (1 << register) != 0 {
+                    memory.write_u32(address, self.registers[register]);
+                    address = address.wrapping_add(4);
+                }
+            }
+            if include_lr {
+                memory.write_u32(address, self.registers[14]);
+            }
+
+            self.registers[13] = new_stack;
+            return Ok(());
+        }
+
+        if opcode & 0xFE00 == 0xBC00 {
+            let registers = u32::from(opcode & 0x00FF);
+            let include_pc = opcode & 0x0100 != 0;
+            let register_count = registers.count_ones() + u32::from(include_pc);
+            if register_count == 0 {
+                return Err(CpuError::UnsupportedInstruction {
+                    address,
+                    state: ExecutionState::Thumb,
+                    opcode,
+                });
+            }
+            let mut address = self.registers[13];
+
+            for register in 0..8 {
+                if registers & (1 << register) != 0 {
+                    self.registers[register] = memory.read_u32(address);
+                    address = address.wrapping_add(4);
+                }
+            }
+            if include_pc {
+                let target = memory.read_u32(address);
+                if target & 1 != 0 {
+                    self.cpsr |= CPSR_THUMB;
+                    self.registers[15] = target & !1;
+                } else {
+                    self.cpsr &= !CPSR_THUMB;
+                    self.registers[15] = target & !3;
+                }
+            }
+
+            self.registers[13] = self.registers[13].wrapping_add(register_count * 4);
+            return Ok(());
+        }
+
+        if opcode & 0xFF00 == 0xB000 {
+            let offset = u32::from(opcode & 0x7F) * 4;
+            if opcode & 0x0080 != 0 {
+                self.registers[13] = self.registers[13].wrapping_sub(offset);
+            } else {
+                self.registers[13] = self.registers[13].wrapping_add(offset);
+            }
+            return Ok(());
+        }
+
+        if matches!(opcode & 0xF000, 0x6000 | 0x7000) {
+            let byte_transfer = opcode & 0x1000 != 0;
+            if byte_transfer {
+                let is_load = opcode & 0x0800 != 0;
+                let base = usize::from((opcode >> 3) & 0x7);
+                let source_or_destination = usize::from(opcode & 0x7);
+                let offset = u32::from((opcode >> 6) & 0x1F);
+                let transfer_address = self.registers[base].wrapping_add(offset);
+
+                if is_load {
+                    self.registers[source_or_destination] =
+                        u32::from(memory.read_u8(transfer_address));
+                } else {
+                    memory.write_u8(
+                        transfer_address,
+                        self.registers[source_or_destination] as u8,
+                    );
+                }
+                return Ok(());
+            }
+
             let is_load = opcode & 0x0800 != 0;
             let base = usize::from((opcode >> 3) & 0x7);
             let source_or_destination = usize::from(opcode & 0x7);
@@ -368,9 +711,85 @@ impl ThumbCpu {
             return Ok(());
         }
 
+        if opcode & 0xF000 == 0x8000 {
+            let is_load = opcode & 0x0800 != 0;
+            let offset = u32::from((opcode >> 6) & 0x1F) * 2;
+            let base = usize::from((opcode >> 3) & 0x7);
+            let source_or_destination = usize::from(opcode & 0x7);
+            let transfer_address = self.registers[base].wrapping_add(offset);
+
+            if is_load {
+                self.registers[source_or_destination] =
+                    u32::from(memory.read_u16(transfer_address & !1));
+            } else {
+                memory.write_u16(
+                    transfer_address & !1,
+                    self.registers[source_or_destination] as u16,
+                );
+            }
+            return Ok(());
+        }
+
+        if opcode & 0xF000 == 0xC000 {
+            let load = opcode & 0x0800 != 0;
+            let base_register = usize::from((opcode >> 8) & 0x7);
+            let register_list = u32::from(opcode & 0x00FF);
+            if register_list == 0 {
+                return Err(CpuError::UnsupportedInstruction {
+                    address,
+                    state: ExecutionState::Thumb,
+                    opcode,
+                });
+            }
+
+            let initial_address = self.registers[base_register];
+            let register_count = register_list.count_ones();
+            let updated_base = initial_address.wrapping_add(register_count * 4);
+            let mut transfer_address = initial_address;
+            for register in 0..8 {
+                if register_list & (1 << register) == 0 {
+                    continue;
+                }
+                if load {
+                    self.registers[register] = memory.read_u32(transfer_address & !3);
+                } else {
+                    memory.write_u32(transfer_address & !3, self.registers[register]);
+                }
+                transfer_address = transfer_address.wrapping_add(4);
+            }
+
+            if !load || register_list & (1 << base_register) == 0 {
+                self.registers[base_register] = updated_base;
+            }
+            return Ok(());
+        }
+
         if opcode & 0xF000 == 0xD000 {
             let condition = ((opcode >> 8) & 0xF) as u8;
             if condition >= 0xE {
+                if condition == 0xF {
+                    let service = (opcode & 0x00FF) as u8;
+                    if service == 0x01 {
+                        if self.registers[0] & !0xFF != 0 {
+                            return Err(CpuError::UnsupportedBiosCall {
+                                address,
+                                state: ExecutionState::Thumb,
+                                service,
+                            });
+                        }
+                        self.register_ram_reset(memory, self.registers[0]);
+                        return Ok(());
+                    }
+                    if service == 0x0B {
+                        self.cpu_set(memory);
+                        return Ok(());
+                    }
+                    return Err(CpuError::UnsupportedBiosCall {
+                        address,
+                        state: ExecutionState::Thumb,
+                        service,
+                    });
+                }
                 return Err(CpuError::UnsupportedInstruction {
                     address,
                     state: ExecutionState::Thumb,
@@ -381,6 +800,143 @@ impl ThumbCpu {
                 let offset = sign_extend(u32::from(opcode & 0x00FF), 8) << 1;
                 self.registers[15] = address.wrapping_add(4).wrapping_add(offset);
             }
+            return Ok(());
+        }
+
+        if opcode & 0xFC00 == 0x4400 {
+            let operation = (opcode >> 8) & 0x3;
+            let destination = usize::from((opcode & 0x7) | ((opcode >> 4) & 0x8));
+            let source = usize::from((opcode >> 3) & 0xF);
+            let left = self.read_register(destination, ExecutionState::Thumb, address);
+            let right = self.read_register(source, ExecutionState::Thumb, address);
+
+            match operation {
+                0 => {
+                    let result = left.wrapping_add(right);
+                    if destination == 15 {
+                        self.registers[15] = result & !1;
+                    } else {
+                        self.registers[destination] = result;
+                    }
+                }
+                1 => self.set_sub_flags(left, right, left.wrapping_sub(right)),
+                2 => {
+                    if destination == 15 {
+                        self.registers[15] = right & !1;
+                    } else {
+                        self.registers[destination] = right;
+                    }
+                }
+                3 => {
+                    if opcode & 0x0087 != 0 {
+                        return Err(CpuError::UnsupportedInstruction {
+                            address,
+                            state: ExecutionState::Thumb,
+                            opcode,
+                        });
+                    }
+                    if right & 1 != 0 {
+                        self.cpsr |= CPSR_THUMB;
+                        self.registers[15] = right & !1;
+                    } else {
+                        self.cpsr &= !CPSR_THUMB;
+                        self.registers[15] = right & !3;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
+
+        if opcode & 0xFC00 == 0x4000 {
+            let operation = (opcode >> 6) & 0xF;
+            let source_register = usize::from((opcode >> 3) & 0x7);
+            let destination = usize::from(opcode & 0x7);
+            let left = self.registers[destination];
+            let right = self.registers[source_register];
+            let carry_in = self.cpsr & FLAG_C != 0;
+            let (result, write_result) = match operation {
+                0 => (left & right, true),
+                1 => (left ^ right, true),
+                2 => {
+                    let (value, carry) = shift_register(left, right, 0, carry_in);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if carry { FLAG_C } else { 0 };
+                    (value, true)
+                }
+                3 => {
+                    let (value, carry) = shift_register(left, right, 1, carry_in);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if carry { FLAG_C } else { 0 };
+                    (value, true)
+                }
+                4 => {
+                    let (value, carry) = shift_register(left, right, 2, carry_in);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if carry { FLAG_C } else { 0 };
+                    (value, true)
+                }
+                5 => {
+                    let result = left.wrapping_add(right).wrapping_add(u32::from(carry_in));
+                    self.set_arithmetic_flags(false, left, right, u32::from(carry_in), result);
+                    (result, true)
+                }
+                6 => {
+                    let borrow = u32::from(!carry_in);
+                    let result = left.wrapping_sub(right).wrapping_sub(borrow);
+                    self.set_arithmetic_flags(true, left, right, borrow, result);
+                    (result, true)
+                }
+                7 => {
+                    let (value, carry) = shift_register(left, right, 3, carry_in);
+                    self.cpsr = (self.cpsr & !FLAG_C) | if carry { FLAG_C } else { 0 };
+                    (value, true)
+                }
+                8 => (left & right, false),
+                9 => {
+                    let result = 0u32.wrapping_sub(right);
+                    self.set_sub_flags(0, right, result);
+                    (result, true)
+                }
+                10 => {
+                    let result = left.wrapping_sub(right);
+                    self.set_sub_flags(left, right, result);
+                    (result, false)
+                }
+                11 => {
+                    let result = left.wrapping_add(right);
+                    self.set_add_flags(
+                        left,
+                        right,
+                        result,
+                        u64::from(left) + u64::from(right) > u64::from(u32::MAX),
+                    );
+                    (result, false)
+                }
+                12 => (left | right, true),
+                13 => (left.wrapping_mul(right), true),
+                14 => (left & !right, true),
+                15 => (!right, true),
+                _ => unreachable!(),
+            };
+
+            if write_result {
+                self.registers[destination] = result;
+                if !matches!(operation, 5 | 6 | 8 | 9 | 10 | 11) {
+                    self.set_nz(result);
+                }
+            }
+            return Ok(());
+        }
+
+        if opcode & 0xF800 == 0xF000 {
+            let offset = sign_extend(u32::from(opcode & 0x07FF) << 12, 23);
+            self.registers[14] = address.wrapping_add(4).wrapping_add(offset);
+            return Ok(());
+        }
+
+        if opcode & 0xF800 == 0xF800 {
+            let return_address = address.wrapping_add(2);
+            let target = self.registers[14].wrapping_add(u32::from(opcode & 0x07FF) << 1);
+            self.registers[14] = return_address | 1;
+            self.registers[15] = target & !1;
             return Ok(());
         }
 
@@ -418,6 +974,87 @@ impl ThumbCpu {
         self.cpsr = (self.cpsr & !(FLAG_C | FLAG_V))
             | if carry { FLAG_C } else { 0 }
             | if overflow { FLAG_V } else { 0 };
+    }
+
+    fn set_cv(&mut self, carry: bool, overflow: bool) {
+        self.cpsr = (self.cpsr & !(FLAG_C | FLAG_V))
+            | if carry { FLAG_C } else { 0 }
+            | if overflow { FLAG_V } else { 0 };
+    }
+
+    fn set_arithmetic_flags(
+        &mut self,
+        subtract: bool,
+        left: u32,
+        right: u32,
+        adjustment: u32,
+        result: u32,
+    ) {
+        self.set_nz(result);
+        let (carry, overflow) = if subtract {
+            let subtrahend = u64::from(right) + u64::from(adjustment);
+            let signed_result =
+                i64::from(left as i32) - i64::from(right as i32) - i64::from(adjustment);
+            (
+                u64::from(left) >= subtrahend,
+                signed_result < i64::from(i32::MIN) || signed_result > i64::from(i32::MAX),
+            )
+        } else {
+            let wide_result = u64::from(left) + u64::from(right) + u64::from(adjustment);
+            let signed_result =
+                i64::from(left as i32) + i64::from(right as i32) + i64::from(adjustment);
+            (
+                wide_result > u64::from(u32::MAX),
+                signed_result < i64::from(i32::MIN) || signed_result > i64::from(i32::MAX),
+            )
+        };
+        self.set_cv(carry, overflow);
+    }
+
+    fn register_ram_reset(&self, memory: &mut MemoryMap, flags: u32) {
+        if flags & (1 << 0) != 0 {
+            memory.ewram.fill(0);
+        }
+        if flags & (1 << 1) != 0 {
+            let clear_end = memory.iwram.len() - 0x200;
+            memory.iwram[..clear_end].fill(0);
+        }
+        if flags & (1 << 2) != 0 {
+            memory.palette.fill(0);
+        }
+        if flags & (1 << 3) != 0 {
+            memory.vram.fill(0);
+        }
+        if flags & (1 << 4) != 0 {
+            memory.oam.fill(0);
+        }
+        if flags & 0xE0 != 0 {
+            memory.io.fill(0);
+        }
+    }
+
+    fn cpu_set(&self, memory: &mut MemoryMap) {
+        let control = self.registers[2];
+        let word_transfer = control & (1 << 26) != 0;
+        let fixed_source = control & (1 << 24) != 0;
+        let count = control & 0x001F_FFFF;
+        let unit_size = if word_transfer { 4 } else { 2 };
+        let mut source = self.registers[0] & !(unit_size - 1);
+        let mut destination = self.registers[1] & !(unit_size - 1);
+
+        for _ in 0..count {
+            if word_transfer {
+                let value = memory.read_u32(source);
+                memory.write_u32(destination, value);
+            } else {
+                let value = memory.read_u16(source);
+                memory.write_u16(destination, value);
+            }
+            if !fixed_source {
+                source = source.wrapping_add(unit_size);
+            }
+            destination = destination.wrapping_add(unit_size);
+        }
     }
 
     fn condition_passed(&self, condition: u8) -> bool {
@@ -523,6 +1160,71 @@ fn sign_extend(value: u32, bits: u32) -> u32 {
     ((value << (32 - bits)) as i32 >> (32 - bits)) as u32
 }
 
+fn shift_immediate(value: u32, shift_type: u32, amount: u32, carry_in: bool) -> (u32, bool) {
+    match shift_type {
+        0 if amount == 0 => (value, carry_in),
+        0 => (value << amount, value & (1 << (32 - amount)) != 0),
+        1 if amount == 0 => (0, value & FLAG_N != 0),
+        1 => (value >> amount, value & (1 << (amount - 1)) != 0),
+        2 if amount == 0 => {
+            let result = if value & FLAG_N != 0 { u32::MAX } else { 0 };
+            (result, value & FLAG_N != 0)
+        }
+        2 => {
+            let result = ((value as i32) >> amount) as u32;
+            (result, value & (1 << (amount - 1)) != 0)
+        }
+        3 if amount == 0 => {
+            let result = (u32::from(carry_in) << 31) | (value >> 1);
+            (result, value & 1 != 0)
+        }
+        3 => {
+            let result = value.rotate_right(amount);
+            (result, result & FLAG_N != 0)
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn shift_register(
+    value: u32,
+    amount_register: u32,
+    shift_type: u32,
+    carry_in: bool,
+) -> (u32, bool) {
+    let amount = amount_register & 0xFF;
+    if amount == 0 {
+        return (value, carry_in);
+    }
+
+    match shift_type {
+        0 if amount < 32 => (value << amount, value & (1 << (32 - amount)) != 0),
+        0 if amount == 32 => (0, value & 1 != 0),
+        0 => (0, false),
+        1 if amount < 32 => (value >> amount, value & (1 << (amount - 1)) != 0),
+        1 if amount == 32 => (0, value & FLAG_N != 0),
+        1 => (0, false),
+        2 if amount < 32 => {
+            let result = ((value as i32) >> amount) as u32;
+            (result, value & (1 << (amount - 1)) != 0)
+        }
+        2 => {
+            let negative = value & FLAG_N != 0;
+            (if negative { u32::MAX } else { 0 }, negative)
+        }
+        3 => {
+            let rotation = amount & 0x1F;
+            if rotation == 0 {
+                (value, value & FLAG_N != 0)
+            } else {
+                let result = value.rotate_right(rotation);
+                (result, result & FLAG_N != 0)
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +1235,298 @@ mod tests {
 
     fn arm_word(opcode: u32) -> Vec<u8> {
         opcode.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn arm_add_immediate_uses_architectural_pc_value() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE28F_0018)); // ADD r0, pc, #0x18
+        let mut cpu = ThumbCpu::boot_hle();
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], ROM_BASE + 8 + 0x18);
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_mov_register_reads_pc_as_instruction_address_plus_eight() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE1A0_E00F)); // MOV lr, pc
+        let mut cpu = ThumbCpu::boot_hle();
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[14], ROM_BASE + 8);
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_mov_lsl_immediate_updates_shifter_carry() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE1B0_0081)); // MOVS r0, r1, LSL #1
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[1] = 0x8000_0001;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 2);
+        assert_ne!(cpu.cpsr & FLAG_C, 0);
+    }
+
+    #[test]
+    fn thumb_push_and_pop_register_list_round_trip_in_ascending_order() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xB5F0, 0xBDF0])); // PUSH {r4-r7, lr}; POP {r4-r7, pc}
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[13] = 0x0300_0100;
+        cpu.registers[4] = 0x44;
+        cpu.registers[5] = 0x55;
+        cpu.registers[6] = 0x66;
+        cpu.registers[7] = 0x77;
+        cpu.registers[14] = ROM_BASE + 1;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[13], 0x0300_00EC);
+        assert_eq!(memory.read_u32(0x0300_00EC), 0x44);
+        assert_eq!(memory.read_u32(0x0300_00F0), 0x55);
+        assert_eq!(memory.read_u32(0x0300_00F4), 0x66);
+        assert_eq!(memory.read_u32(0x0300_00F8), 0x77);
+        assert_eq!(memory.read_u32(0x0300_00FC), ROM_BASE + 1);
+
+        cpu.registers[4..8].fill(0);
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(&cpu.registers[4..8], &[0x44, 0x55, 0x66, 0x77]);
+        assert_eq!(cpu.registers[13], 0x0300_0100);
+        assert_eq!(cpu.registers[15], ROM_BASE);
+        assert!(cpu.is_thumb());
+    }
+
+    #[test]
+    fn thumb_add_sub_sp_adjusts_stack_by_scaled_immediate() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xB081, 0xB001])); // SUB sp, #4; ADD sp, #4
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[13] = 0x0300_0100;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[13], 0x0300_00FC);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[13], 0x0300_0100);
+    }
+
+    #[test]
+    fn thumb_sp_relative_word_store_and_load_use_scaled_offset() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x9301, 0x9B01])); // STR r3, [sp, #4]; LDR r3, [sp, #4]
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[13] = 0x0300_0100;
+        cpu.registers[3] = 0x1234_5678;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u32(0x0300_0104), 0x1234_5678);
+
+        cpu.registers[3] = 0;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[3], 0x1234_5678);
+    }
+
+    #[test]
+    fn thumb_immediate_lsl_updates_result_and_carry() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x0492])); // LSLS r2, r2, #18
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[2] = 0x0000_4000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[2], 0x0000_0000);
+        assert_ne!(cpu.cpsr & FLAG_Z, 0);
+        assert_ne!(cpu.cpsr & FLAG_C, 0);
+    }
+
+    #[test]
+    fn thumb_high_register_mov_copies_r8_to_r7() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x4647])); // MOV r7, r8
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[8] = 0x1234_5678;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[7], 0x1234_5678);
+        assert_eq!(cpu.registers[15], ROM_BASE + 2);
+    }
+
+    #[test]
+    fn thumb_high_register_bx_switches_to_arm_state() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x4700])); // BX r0
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = ROM_BASE + 0x22;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert!(!cpu.is_thumb());
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x20);
+    }
+
+    #[test]
+    fn thumb_bl_prefix_and_suffix_branch_and_save_return_address() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xF000, 0xF802]));
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[14], ROM_BASE + 4);
+        assert_eq!(cpu.registers[15], ROM_BASE + 2);
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[15], ROM_BASE + 8);
+        assert_eq!(cpu.registers[14], ROM_BASE + 5);
+        assert!(cpu.is_thumb());
+    }
+
+    #[test]
+    fn thumb_bl_prefix_sign_extends_the_high_offset() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xF7FF, 0xF800]));
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(
+            cpu.registers[14],
+            ROM_BASE.wrapping_add(4).wrapping_sub(0x1000)
+        );
+    }
+
+    #[test]
+    fn thumb_swi_register_ram_reset_clears_selected_regions() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF01])); // SWI RegisterRamReset
+        memory.ewram.fill(0xA5);
+        memory.iwram.fill(0x5A);
+        memory.palette.fill(0x11);
+        memory.vram.fill(0x22);
+        memory.oam.fill(0x33);
+        memory.io.fill(0x44);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0b1110_1111;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert!(memory.ewram.iter().all(|byte| *byte == 0));
+        assert_eq!(memory.iwram[0], 0);
+        assert_eq!(memory.iwram[memory.iwram.len() - 0x200], 0x5A);
+        assert!(memory.palette.iter().all(|byte| *byte == 0));
+        assert!(memory.vram.iter().all(|byte| *byte == 0));
+        assert_eq!(memory.oam[0], 0x33);
+        assert!(memory.io.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn thumb_swi_cpuset_copies_word_ranges() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF0B])); // SWI CpuSet
+        memory.write_u32(0x0200_0000, 0x1234_5678);
+        memory.write_u32(0x0200_0004, 0x9ABC_DEF0);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0200_0100;
+        cpu.registers[2] = (1 << 26) | 2;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u32(0x0200_0100), 0x1234_5678);
+        assert_eq!(memory.read_u32(0x0200_0104), 0x9ABC_DEF0);
+        assert_eq!(cpu.registers[15], ROM_BASE + 2);
+    }
+
+    #[test]
+    fn thumb_swi_cpuset_fills_from_a_fixed_halfword_source() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF0B]));
+        memory.write_u16(0x0200_0000, 0x55AA);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0200_0100;
+        cpu.registers[2] = (1 << 24) | 3;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u16(0x0200_0100), 0x55AA);
+        assert_eq!(memory.read_u16(0x0200_0102), 0x55AA);
+        assert_eq!(memory.read_u16(0x0200_0104), 0x55AA);
+    }
+
+    #[test]
+    fn unsupported_thumb_swi_is_reported_explicitly() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF02]));
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        assert_eq!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedBiosCall {
+                address: ROM_BASE,
+                state: ExecutionState::Thumb,
+                service: 2,
+            })
+        );
+        assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn register_ram_reset_rejects_unmodeled_flag_groups_without_clearing() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF01]));
+        memory.ewram.fill(0xA5);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = (1 << 0) | (1 << 8);
+
+        assert!(matches!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedBiosCall { service: 1, .. })
+        ));
+        assert!(memory.ewram.iter().all(|byte| *byte == 0xA5));
+        assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn arm_adc_immediate_updates_nzcv_with_carry_in() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE2B0_0001)); // ADCS r0, r0, #1
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = 0x7FFF_FFFF;
+        cpu.cpsr |= FLAG_C;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x8000_0001);
+        assert_ne!(cpu.cpsr & FLAG_N, 0);
+        assert_eq!(cpu.cpsr & FLAG_Z, 0);
+        assert_eq!(cpu.cpsr & FLAG_C, 0);
+        assert_ne!(cpu.cpsr & FLAG_V, 0);
+    }
+
+    #[test]
+    fn arm_rotated_immediate_sets_shifter_carry_and_preserves_overflow() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE3B0_0480)); // MOVS r0, #0x80000000
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.cpsr |= FLAG_V;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x8000_0000);
+        assert_ne!(cpu.cpsr & FLAG_N, 0);
+        assert_ne!(cpu.cpsr & FLAG_C, 0);
+        assert_ne!(cpu.cpsr & FLAG_V, 0);
     }
 
     #[test]
@@ -620,6 +1614,154 @@ mod tests {
     }
 
     #[test]
+    fn thumb_three_operand_add_supports_register_and_immediate_operands() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x1C10, 0x1E50])); // ADDS r0, r2, #0; SUBS r0, r2, #1
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[2] = 0x7FFF_FFFF;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0x7FFF_FFFF);
+        assert_eq!(cpu.cpsr & FLAG_V, 0);
+
+        cpu.registers[1] = 1;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0x7FFF_FFFE);
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn thumb_three_operand_register_add_updates_overflow() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x1888])); // ADDS r0, r1, r2
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[1] = 0x7FFF_FFFF;
+        cpu.registers[2] = 1;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x8000_0000);
+        assert_ne!(cpu.cpsr & FLAG_N, 0);
+        assert_ne!(cpu.cpsr & FLAG_V, 0);
+    }
+
+    #[test]
+    fn thumb_cmp_immediate_updates_flags_without_changing_register() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x2900])); // CMP r1, #0
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[1] = 0;
+        cpu.cpsr |= FLAG_C | FLAG_V;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[1], 0);
+        assert_ne!(cpu.cpsr & FLAG_Z, 0);
+        assert_ne!(cpu.cpsr & FLAG_C, 0);
+        assert_eq!(cpu.cpsr & FLAG_V, 0);
+    }
+
+    #[test]
+    fn thumb_register_orr_sets_result_and_nz_flags() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x4310])); // ORRS r0, r2
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x10;
+        cpu.registers[2] = 0x8000_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x8000_0010);
+        assert_ne!(cpu.cpsr & FLAG_N, 0);
+        assert_eq!(cpu.cpsr & FLAG_Z, 0);
+    }
+
+    #[test]
+    fn thumb_register_and_and_eor_use_their_alu_slots() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x4010, 0x4050])); // ANDS r0, r2; EORS r0, r2
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0xF0;
+        cpu.registers[2] = 0xCC;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0xC0);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0x0C);
+    }
+
+    #[test]
+    fn thumb_halfword_store_and_load_use_scaled_immediate_offset() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x8008, 0x8808])); // STRH r0, [r1, #0]; LDRH r0, [r1, #0]
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0xABCD;
+        cpu.registers[1] = 0x0200_0002;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u16(0x0200_0002), 0xABCD);
+
+        cpu.registers[0] = 0;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0xABCD);
+    }
+
+    #[test]
+    fn thumb_byte_store_and_load_use_unscaled_immediate_offset() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x7008, 0x7808])); // STRB r0, [r1, #0]; LDRB r0, [r1, #0]
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0xABCD;
+        cpu.registers[1] = 0x0200_0003;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u8(0x0200_0003), 0xCD);
+
+        cpu.registers[0] = 0;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0xCD);
+    }
+
+    #[test]
+    fn thumb_stmia_and_ldmia_use_ascending_words_and_write_back_base() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xC303, 0xCB03])); // STMIA r3!, {r0,r1}; LDMIA r3!, {r0,r1}
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x10;
+        cpu.registers[1] = 0x20;
+        cpu.registers[3] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u32(0x0200_0000), 0x10);
+        assert_eq!(memory.read_u32(0x0200_0004), 0x20);
+        assert_eq!(cpu.registers[3], 0x0200_0008);
+
+        cpu.registers[0] = 0;
+        cpu.registers[1] = 0;
+        cpu.registers[3] = 0x0200_0000;
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x10);
+        assert_eq!(cpu.registers[1], 0x20);
+        assert_eq!(cpu.registers[3], 0x0200_0008);
+    }
+
+    #[test]
+    fn thumb_multiple_transfer_rejects_an_empty_register_list() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xC000]));
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        assert!(matches!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedInstruction { opcode: 0xC000, .. })
+        ));
+        assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
     fn thumb_branch_uses_the_architectural_pc_plus_four() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0xE7FE]));
@@ -633,7 +1775,7 @@ mod tests {
     #[test]
     fn unsupported_thumb_opcode_returns_its_address_and_value() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&program(&[0x0000]));
+        memory.load_cartridge(&program(&[0xDE00]));
         let mut cpu = ThumbCpu::new(ROM_BASE);
         cpu.registers[0] = 0x1234;
         let original_registers = cpu.registers;
@@ -643,7 +1785,7 @@ mod tests {
             Err(CpuError::UnsupportedInstruction {
                 address: ROM_BASE,
                 state: ExecutionState::Thumb,
-                opcode: 0x0000,
+                opcode: 0xDE00,
             })
         );
         assert_eq!(cpu.registers, original_registers);
@@ -829,7 +1971,7 @@ mod tests {
     #[test]
     fn unsupported_arm_opcode_reports_state_and_preserves_cpu_and_memory() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&[0x00, 0x00, 0xA0, 0xE1]);
+        memory.load_cartridge(&[0x10, 0x00, 0xA0, 0xE1]); // MOV r0, r0, LSL r0
         let mut cpu = ThumbCpu::boot_hle();
         cpu.registers[0] = 0x1234;
         let original_registers = cpu.registers;
@@ -841,7 +1983,7 @@ mod tests {
             Err(CpuError::UnsupportedArmInstruction {
                 address: ROM_BASE,
                 state: ExecutionState::Arm,
-                opcode: 0xE1A0_0000,
+                opcode: 0xE1A0_0010,
             })
         );
         assert_eq!(cpu.registers, original_registers);
@@ -867,15 +2009,17 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_byte_store_is_not_misdecoded_as_word_store() {
+    fn thumb_byte_store_writes_only_the_low_byte() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&program(&[0x7000]));
+        memory.load_cartridge(&program(&[0x7008]));
         let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x1234_56AB;
+        cpu.registers[1] = 0x0200_0000;
 
-        assert!(matches!(
-            cpu.step(&mut memory),
-            Err(CpuError::UnsupportedInstruction { opcode: 0x7000, .. })
-        ));
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u8(0x0200_0000), 0xAB);
+        assert_eq!(memory.read_u8(0x0200_0001), 0);
     }
 
     #[test]

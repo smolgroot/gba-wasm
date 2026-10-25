@@ -34,9 +34,9 @@ main { width: 100%; flex: 1; }
 .console-stage { position: relative; height: 490px; display: grid; place-items: center; isolation: isolate; }
 .console-stage::before { content: ''; position: absolute; z-index: -2; inset: 22px 0; opacity: .38; background-image: linear-gradient(#5b5e5140 1px, transparent 1px), linear-gradient(90deg, #5b5e5140 1px, transparent 1px); background-size: 34px 34px; mask-image: radial-gradient(ellipse, #000 20%, transparent 72%); }
 .console-halo { position: absolute; z-index: -1; width: 390px; height: 300px; border: 1px solid #bb8df22b; border-radius: 50%; transform: rotate(-20deg); box-shadow: 0 0 0 32px #bb8df20c, 0 0 0 66px #bb8df208; }
-.console { position: relative; width: min(390px, 84%); height: 380px; padding: 19px 22px 15px; border: 1px solid #5f6256; border-radius: 35px 35px 42px 42px; background: linear-gradient(145deg, #41443a, #272a23 37%, #1c1e1a 80%); box-shadow: 22px 28px 45px #080a087a, inset 0 2px #ffffff25, inset -5px -8px #090a0952; transform: rotate(-5deg); }
+.console { position: relative; width: min(390px, 84%); height: 380px; padding: 19px 22px 15px; border: 1px solid #a28ab9; border-radius: 35px 35px 42px 42px; background: linear-gradient(145deg, #927aaa 0%, #765d91 37%, #5e4978 80%); box-shadow: 22px 28px 45px #08060b7a, inset 0 2px #f2e8ff45, inset -5px -8px #38294788; transform: rotate(-5deg); }
 .console::after { content: ''; position: absolute; z-index: -1; bottom: -16px; left: 8%; right: 8%; height: 30px; border-radius: 50%; background: #0009; filter: blur(15px); }
-.console-topline, .console-bottomline { display: flex; justify-content: space-between; color: #aeb09f; font: 9px var(--mono); }
+.console-topline, .console-bottomline { display: flex; justify-content: space-between; color: #e0d3ec; font: 9px var(--mono); }
 .console-topline span:first-child { color: var(--violet-light); }
 .console-screen-frame { height: 212px; margin: 14px 7px 0; padding: 11px; border: 1px solid #11130f; border-radius: 15px; background: #12140f; box-shadow: inset 0 2px 5px #000; }
 .console-screen { height: 100%; position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; overflow: hidden; border: 1px solid #8f6ea4; background: radial-gradient(ellipse at center, #50385f, #34263f 69%, #251e2c); box-shadow: inset 0 0 26px #16101c; }
@@ -45,18 +45,18 @@ main { width: 100%; flex: 1; }
 .screen-scanlines { position: absolute; inset: 0; pointer-events: none; opacity: .22; background: repeating-linear-gradient(0deg, transparent 0 3px, #10180f 4px); }
 .console-controls { position: relative; height: 113px; display: flex; align-items: center; justify-content: space-between; padding: 4px 17px 0; }
 .dpad { position: relative; width: 85px; height: 75px; }
-.dpad span, .dpad i, .dpad b, .dpad em, .dpad strong { position: absolute; display: block; background: linear-gradient(140deg, #141612, #2b2e27); border: 1px solid #3d4038; }
+.dpad span, .dpad i, .dpad b, .dpad em, .dpad strong { position: absolute; display: block; background: linear-gradient(140deg, #29232f, #17141c); border: 1px solid #40354a; }
 .dpad span { left: 29px; top: 8px; width: 27px; height: 58px; border-radius: 4px; }
 .dpad i { left: 13px; top: 24px; width: 59px; height: 27px; border-radius: 4px; }
-.dpad b { left: 33px; top: 10px; width: 20px; height: 19px; border: 0; background: #22251f; }
-.dpad em { left: 33px; bottom: 10px; width: 20px; height: 19px; border: 0; background: #22251f; }
-.dpad strong { left: 17px; top: 28px; width: 17px; height: 19px; border: 0; background: #22251f; }
+.dpad b { left: 33px; top: 10px; width: 20px; height: 19px; border: 0; background: #211b28; }
+.dpad em { left: 33px; bottom: 10px; width: 20px; height: 19px; border: 0; background: #211b28; }
+.dpad strong { left: 17px; top: 28px; width: 17px; height: 19px; border: 0; background: #211b28; }
 .console-speaker { display: flex; gap: 5px; align-self: flex-end; margin-bottom: 17px; transform: rotate(-35deg); }
-.console-speaker i { width: 3px; height: 34px; border-radius: 5px; background: #10120f; box-shadow: 1px 1px #494c42; }
+.console-speaker i { width: 3px; height: 34px; border-radius: 5px; background: #30273a; box-shadow: 1px 1px #a38ab8; }
 .action-buttons { display: flex; gap: 11px; transform: rotate(-28deg); }
 .action-buttons b { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(145deg, #c85a43, #743326); color: #f4cbb7; font: 10px var(--mono); box-shadow: 2px 4px #10110e, inset 1px 2px #ffffff33; }
-.console-bottomline { color: #838679; font-size: 8px; }
-.console-bottomline i { display: inline-block; width: 22px; height: 5px; margin: 0 4px; border-radius: 6px; background: #171915; box-shadow: inset 0 1px #090a08; }
+.console-bottomline { color: #d2c2e0; font-size: 8px; }
+.console-bottomline i { display: inline-block; width: 22px; height: 5px; margin: 0 4px; border-radius: 6px; background: #362b42; box-shadow: inset 0 1px #211a29; }
 .stage-coordinate { position: absolute; top: 27px; right: 10px; color: #656a5c; font: 9px var(--mono); }
 .stage-caption { position: absolute; left: 4px; bottom: 15px; color: #858a7e; font: 9px var(--mono); }
 .stage-caption span { margin-right: 9px; color: var(--violet); }

@@ -16,18 +16,31 @@ ARM:
 - conditional `BX`
 - conditional `MSR CPSR_<fields>, Rm` with valid ARM7TDMI mode changes and banked registers; direct T-bit changes remain unsupported
 - conditional immediate-offset ARM byte and word `LDR`/`STR`, including pre/post indexing, writeback, and PC-relative loads
-- conditional immediate `MOV`
+- ARM data processing with immediate or immediate-shifted register operands: `AND`, `EOR`, `SUB`, `RSB`, `ADD`, `ADC`, `SBC`, `RSC`, `TST`, `TEQ`, `CMP`, `CMN`, `ORR`, `MOV`, `BIC`, and `MVN`
 
 Thumb:
 
 - `MOVS Rd, #imm8`
-- `ADDS Rd, #imm8` and `SUBS Rd, #imm8`
+- `CMP Rd, #imm8`
+- `ADDS`/`SUBS` with 8-bit immediate, 3-bit immediate, or low-register operands
 - `LDR Rd, [PC, #imm]`
 - immediate word `LDR` and `STR`
+- SP-relative word `LDR` and `STR`
+- immediate halfword `LDRH` and `STRH`
+- immediate byte `LDRB` and `STRB`
+- low-register-list `LDMIA` and `STMIA`
+- `PUSH` and `POP` register lists, including `LR`/`PC`
+- `ADD`/`SUB SP, #imm`
+- high-register `ADD`, `CMP`, `MOV`, and `BX`
+- low-register ALU operations and register shifts
+- immediate `LSL`, `LSR`, and `ASR`
+- two-halfword `BL` long branches
+- Thumb `SWI 1` (`RegisterRamReset`) for modeled memory regions only
+- Thumb `SWI 0x0B` (`CpuSet`) for halfword/word copies and fixed-source fills
 - conditional branches for conditions EQ through LE
 - unconditional branch
 
-Unsupported instructions return the opcode and address rather than being treated as no-ops. `MSR CPSR_<fields>, Rm` supports valid ARM7TDMI mode changes with banked register storage for FIQ, IRQ, Supervisor, Abort, and Undefined modes; User and System share a register bank. SPSR writes and CPSR writes that change the T bit remain unsupported. ARM data processing beyond immediate `MOV`, register-offset ARM transfers, Thumb byte transfers, interrupts, and cycle timing are not implemented.
+Unsupported instructions return the opcode and address rather than being treated as no-ops. Immediate operands support ARM's rotated 8-bit encoding and logical shifter carry; register operands support immediate `LSL`, `LSR`, `ASR`, and `ROR` shifts. `MSR CPSR_<fields>, Rm` supports valid ARM7TDMI mode changes with banked register storage for FIQ, IRQ, Supervisor, Abort, and Undefined modes; User and System share a register bank. SPSR writes and CPSR writes that change the T bit remain unsupported. The `RegisterRamReset` HLE supports the low-byte flags for EWRAM, IWRAM, palette, VRAM, OAM, and the modeled I/O array; `CpuSet` supports the standard fixed-source and halfword/word copy forms. Reserved reset flags and other BIOS services return explicit unsupported-BIOS errors. Register-specified ARM shifts, register-offset ARM transfers, Thumb byte transfers, interrupts, and cycle timing are not implemented.
 
 The CPSR T bit selects the instruction set. ARM fetches use word-aligned addresses and Thumb fetches use halfword-aligned addresses. Architectural reads of PC use instruction address + 8 in ARM and aligned instruction address + 4 in Thumb. Unsupported-opcode errors include the execution state and leave the faulting PC and other CPU/memory state unchanged.
 
