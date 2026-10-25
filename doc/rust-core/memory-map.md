@@ -15,8 +15,10 @@ The first milestone defines the addressable memory layout used by the emulator c
 
 ## Implementation notes
 
-The current implementation keeps these regions as contiguous byte arrays in the `MemoryMap` structure. The `read_u8` and `write_u8` methods map GBA-style addresses into the correct storage regions.
+The current implementation keeps memory regions as contiguous byte arrays in `MemoryMap`. The `read_u8` and `write_u8` methods map GBA-style addresses into storage regions. The VRAM aperture mirrors the final 32 KiB into addresses `0x06018000` through `0x0601FFFF`.
+
+Mode 3 uses the first 76,800 bytes of VRAM as a 240 x 160 array of little-endian RGB555 pixels.
 
 ## Validation
 
-The memory map is covered by Rust unit tests that exercise read and write operations for external work RAM.
+Rust tests cover EWRAM access, direct VRAM byte access, and the mirrored VRAM aperture.

@@ -14,12 +14,9 @@ pub struct GbaCore {
 
 impl GbaCore {
     pub fn new() -> Self {
-        let mut gpu = GpuCore::new();
-        gpu.write_test_pattern();
-
         Self {
             memory: MemoryMap::new(),
-            gpu,
+            gpu: GpuCore::new(),
         }
     }
 
@@ -31,22 +28,9 @@ impl GbaCore {
         self.memory.write_u8(addr, value)
     }
 
-    pub fn render_test_frame(&mut self, width: usize, height: usize) -> Vec<u8> {
-        let mut output = vec![0u8; width * height * 4];
-
-        let render_width = width.min(SCREEN_WIDTH);
-        let render_height = height.min(SCREEN_HEIGHT);
-
-        for y in 0..render_height {
-            for x in 0..render_width {
-                let source_index = (y * SCREEN_WIDTH + x) * 4;
-                let dest_index = (y * width + x) * 4;
-                output[dest_index..dest_index + 4]
-                    .copy_from_slice(&self.gpu.framebuffer[source_index..source_index + 4]);
-            }
-        }
-
-        output
+    pub fn render_frame(&mut self) -> Vec<u8> {
+        self.gpu.render_mode3(&self.memory);
+        self.gpu.framebuffer.clone()
     }
 }
 
@@ -93,7 +77,9 @@ pub fn hello(name: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn make_test_frame(width: usize, height: usize) -> Vec<u8> {
+pub fn render_mode3(vram: &[u8]) -> Vec<u8> {
     let mut core = GbaCore::new();
-    core.render_test_frame(width, height)
+    let copy_len = vram.len().min(core.memory.vram.len());
+    core.memory.vram[..copy_len].copy_from_slice(&vram[..copy_len]);
+    core.render_frame()
 }

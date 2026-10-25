@@ -4,6 +4,15 @@ pub const VRAM_SIZE: usize = 96 * 1024;
 pub const OAM_SIZE: usize = 1 * 1024;
 pub const PALETTE_SIZE: usize = 1 * 1024;
 
+fn vram_index(addr: u32) -> usize {
+    let offset = ((addr - 0x0600_0000) as usize) & 0x1_FFFF;
+    if offset >= 0x1_8000 {
+        offset - 0x8000
+    } else {
+        offset
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
     pub ewram: Vec<u8>,
@@ -31,7 +40,7 @@ impl MemoryMap {
             0x0200_0000..=0x02FF_FFFF => self.ewram[(addr as usize - 0x0200_0000) % EWRAM_SIZE],
             0x0300_0000..=0x03FF_FFFF => self.iwram[(addr as usize - 0x0300_0000) % IWRAM_SIZE],
             0x0500_0000..=0x05FF_FFFF => self.palette[(addr as usize - 0x0500_0000) % PALETTE_SIZE],
-            0x0600_0000..=0x06FF_FFFF => self.vram[(addr as usize - 0x0600_0000) % VRAM_SIZE],
+            0x0600_0000..=0x06FF_FFFF => self.vram[vram_index(addr)],
             0x0700_0000..=0x07FF_FFFF => self.oam[(addr as usize - 0x0700_0000) % OAM_SIZE],
             _ => 0,
         }
@@ -52,8 +61,7 @@ impl MemoryMap {
                 self.palette[index] = value;
             }
             0x0600_0000..=0x06FF_FFFF => {
-                let index = (addr as usize - 0x0600_0000) % VRAM_SIZE;
-                self.vram[index] = value;
+                self.vram[vram_index(addr)] = value;
             }
             0x0700_0000..=0x07FF_FFFF => {
                 let index = (addr as usize - 0x0700_0000) % OAM_SIZE;
@@ -78,5 +86,28 @@ impl MemoryMap {
 impl Default for MemoryMap {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vram_reads_and_writes_bytes_at_their_offsets() {
+        let mut memory = MemoryMap::new();
+        memory.write_u8(0x0600_1234, 0xAB);
+
+        assert_eq!(memory.vram[0x1234], 0xAB);
+        assert_eq!(memory.read_u8(0x0600_1234), 0xAB);
+    }
+
+    #[test]
+    fn upper_vram_aperture_mirrors_the_last_32_kib() {
+        let mut memory = MemoryMap::new();
+        memory.write_u8(0x0601_8000, 0x5A);
+
+        assert_eq!(memory.read_u8(0x0601_0000), 0x5A);
+        assert_eq!(memory.read_u8(0x0601_8000), 0x5A);
     }
 }

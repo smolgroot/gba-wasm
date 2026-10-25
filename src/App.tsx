@@ -33,6 +33,25 @@ const theme = createTheme({
   },
 })
 
+function createMode3DemoVram() {
+  const width = 240
+  const height = 160
+  const vram = new Uint8Array(96 * 1024)
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const color = y < height / 2
+        ? x < width / 2 ? 0x001f : 0x03e0
+        : x < width / 2 ? 0x7c00 : 0x7fff
+      const offset = (y * width + x) * 2
+      vram[offset] = color & 0xff
+      vram[offset + 1] = color >> 8
+    }
+  }
+
+  return vram
+}
+
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [status, setStatus] = useState('Loading WASM…')
@@ -59,7 +78,7 @@ function App() {
 
         const width = 240
         const height = 160
-        const pixels = new Uint8ClampedArray(wasm.make_test_frame(width, height))
+        const pixels = new Uint8ClampedArray(wasm.render_mode3(createMode3DemoVram()))
         const image = new ImageData(pixels, width, height)
 
         context.putImageData(image, 0, 0)

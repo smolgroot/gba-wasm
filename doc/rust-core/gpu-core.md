@@ -1,6 +1,6 @@
 # GPU Core
 
-The GPU core is a minimal framebuffer model designed to support test-driven rendering work.
+The GPU core renders GBA Mode 3 pixels from VRAM into an RGBA framebuffer.
 
 ## Data structure
 
@@ -10,12 +10,14 @@ The `GpuCore` stores a `framebuffer` as a flat RGBA array of length `SCREEN_WIDT
 
 - `clear()` resets the framebuffer
 - `set_pixel(x, y, rgba)` writes an RGBA pixel into the framebuffer
-- `write_test_pattern()` fills the screen with a generated gradient pattern
+- `render_mode3(memory)` reads 240 x 160 little-endian RGB555 pixels from VRAM
+
+Each 5-bit color channel is expanded to 8 bits, and output pixels receive a fully opaque alpha channel.
 
 ## Browser integration
 
-The browser bridge can request the framebuffer bytes and draw them to a canvas using `ImageData`.
+The browser passes VRAM bytes to the Rust `render_mode3` WebAssembly export, then draws the returned framebuffer bytes to a canvas using `ImageData`.
 
 ## Test coverage
 
-A unit test confirms that drawing a red pixel at a specific coordinate updates the expected byte locations in the framebuffer.
+A unit test checks exact red, green, and blue RGB555 decoding and RGBA output. The browser currently sends a four-color VRAM fixture through this same renderer.

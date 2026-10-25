@@ -1,6 +1,6 @@
 # GPU Pipeline
 
-The GPU subsystem is modeled around a framebuffer and pixel-level operations. This keeps the render path deterministic and simple while providing a stable foundation for future GBA video modes and object rendering.
+The current GPU milestone implements GBA Mode 3: a 240 x 160 bitmap with 16-bit RGB555 pixels stored in VRAM. This provides a deterministic first rendering path before adding tile, background, and object modes.
 
 ## Current representation
 
@@ -10,8 +10,8 @@ The `GpuCore` stores a `framebuffer` of RGBA pixel data with dimensions matching
 
 - clear the framebuffer
 - set a single pixel
-- render a test pattern
-- expose raw pixel bytes to the browser
+- decode RGB555 pixels from VRAM
+- expose RGBA framebuffer bytes to the browser through WebAssembly
 
 ## Design intent
 
