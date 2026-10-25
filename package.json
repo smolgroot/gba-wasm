@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "pnpm run wasm:build && vite",
     "build": "pnpm run wasm:build && tsc -b && vite build",
+    "docs:dev": "vitepress dev doc",
+    "docs:build": "vitepress build doc",
+    "docs:preview": "vitepress preview doc",
     "lint": "eslint .",
     "preview": "vite preview",
     "wasm:build": "wasm-pack build ./rust --target web --out-dir ../public/wasm --release"
