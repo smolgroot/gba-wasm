@@ -1,4 +1,4 @@
-name: Deploy documentation
+name: Deploy app and documentation
 
 on:
   push:
@@ -17,16 +17,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - run: pnpm run docs:build
+      - run: mkdir -p dist/docs && cp -R doc/.vitepress/dist/. dist/docs/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: doc/.vitepress/dist
+          path: dist
 
   deploy:
     environment:

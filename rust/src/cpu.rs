@@ -4,6 +4,12 @@ use std::fmt;
 pub const ROM_BASE: u32 = 0x0800_0000;
 
 const CPSR_THUMB: u32 = 1 << 5;
+const CPSR_USER_MODE: u32 = 0x10;
+const CPSR_FIQ_MODE: u32 = 0x11;
+const CPSR_IRQ_MODE: u32 = 0x12;
+const CPSR_SVC_MODE: u32 = 0x13;
+const CPSR_ABORT_MODE: u32 = 0x17;
+const CPSR_UNDEFINED_MODE: u32 = 0x1B;
 const CPSR_SYSTEM_MODE: u32 = 0x1F;
 const CPSR_MODE_MASK: u32 = 0x1F;
 const FLAG_N: u32 = 1 << 31;
@@ -64,6 +70,12 @@ impl fmt::Display for CpuError {
 pub struct ThumbCpu {
     pub registers: [u32; 16],
     pub cpsr: u32,
+    user_bank: [u32; 7],
+    fiq_bank: [u32; 7],
+    irq_bank: [u32; 2],
+    svc_bank: [u32; 2],
+    abort_bank: [u32; 2],
+    undefined_bank: [u32; 2],
 }
 
 impl ThumbCpu {
@@ -73,6 +85,12 @@ impl ThumbCpu {
         Self {
             registers,
             cpsr: CPSR_SYSTEM_MODE | CPSR_THUMB,
+            user_bank: [0; 7],
+            fiq_bank: [0; 7],
+            irq_bank: [0; 2],
+            svc_bank: [0; 2],
+            abort_bank: [0; 2],
+            undefined_bank: [0; 2],
         }
     }
 
@@ -80,9 +98,17 @@ impl ThumbCpu {
         let mut registers = [0; 16];
         registers[13] = 0x0300_7F00;
         registers[15] = ROM_BASE;
+        let mut user_bank = [0; 7];
+        user_bank[5] = registers[13];
         Self {
             registers,
             cpsr: CPSR_SYSTEM_MODE,
+            user_bank,
+            fiq_bank: [0; 7],
+            irq_bank: [0; 2],
+            svc_bank: [0; 2],
+            abort_bank: [0; 2],
+            undefined_bank: [0; 2],
         }
     }
 
@@ -165,9 +191,11 @@ impl ThumbCpu {
 
                 let updated_cpsr = (self.cpsr & !write_mask) | (value & write_mask);
                 let control_written = field_mask & 1 != 0;
+                let updated_mode = updated_cpsr & CPSR_MODE_MASK;
                 if control_written
-                    && (updated_cpsr & CPSR_MODE_MASK != CPSR_SYSTEM_MODE
-                        || (updated_cpsr ^ self.cpsr) & CPSR_THUMB != 0)
+                    && (!Self::is_valid_mode(updated_mode)
+                        || (updated_cpsr ^ self.cpsr) & CPSR_THUMB != 0
+                        || self.cpsr & CPSR_MODE_MASK == CPSR_USER_MODE)
                 {
                     return Err(CpuError::UnsupportedArmInstruction {
                         address,
@@ -176,7 +204,80 @@ impl ThumbCpu {
                     });
                 }
 
-                self.cpsr = (self.cpsr & !write_mask) | (value & write_mask);
+                if control_written && updated_mode != self.cpsr & CPSR_MODE_MASK {
+                    self.switch_mode(updated_mode);
+                }
+                self.cpsr = updated_cpsr;
+            }
+            return Ok(());
+        }
+
+        if opcode & 0x0C00_0000 == 0x0400_0000 {
+            if !self.condition_passed(condition) {
+                return Ok(());
+            }
+            if opcode & (1 << 25) != 0 {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+            let pre_index = opcode & (1 << 24) != 0;
+            let add_offset = opcode & (1 << 23) != 0;
+            let byte_transfer = opcode & (1 << 22) != 0;
+            let writeback = opcode & (1 << 21) != 0;
+            let load = opcode & (1 << 20) != 0;
+            let base_register = ((opcode >> 16) & 0xF) as usize;
+            let destination = ((opcode >> 12) & 0xF) as usize;
+            let base = self.read_register(base_register, ExecutionState::Arm, address);
+            let offset = opcode & 0xFFF;
+            let adjusted_base = if add_offset {
+                base.wrapping_add(offset)
+            } else {
+                base.wrapping_sub(offset)
+            };
+            let transfer_address = if pre_index { adjusted_base } else { base };
+
+            if (!pre_index || writeback)
+                && (base_register == 15 || (load && destination == base_register))
+            {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            if load {
+                let value = if byte_transfer {
+                    u32::from(memory.read_u8(transfer_address))
+                } else {
+                    let aligned_address = transfer_address & !3;
+                    memory
+                        .read_u32(aligned_address)
+                        .rotate_right((transfer_address & 3) * 8)
+                };
+                if destination == 15 {
+                    self.registers[15] = value & !3;
+                } else {
+                    self.registers[destination] = value;
+                }
+            } else {
+                let value = if destination == 15 {
+                    address.wrapping_add(12)
+                } else {
+                    self.registers[destination]
+                };
+                if byte_transfer {
+                    memory.write_u8(transfer_address, value as u8);
+                } else {
+                    memory.write_u32(transfer_address & !3, value);
+                }
+            }
+
+            if !pre_index || writeback {
+                self.registers[base_register] = adjusted_base;
             }
             return Ok(());
         }
@@ -360,6 +461,62 @@ impl ThumbCpu {
             ExecutionState::Thumb => instruction_address.wrapping_add(4) & !3,
         }
     }
+
+    fn is_valid_mode(mode: u32) -> bool {
+        matches!(
+            mode,
+            CPSR_USER_MODE
+                | CPSR_FIQ_MODE
+                | CPSR_IRQ_MODE
+                | CPSR_SVC_MODE
+                | CPSR_ABORT_MODE
+                | CPSR_UNDEFINED_MODE
+                | CPSR_SYSTEM_MODE
+        )
+    }
+
+    fn switch_mode(&mut self, new_mode: u32) {
+        let old_mode = self.cpsr & CPSR_MODE_MASK;
+        if old_mode == new_mode {
+            return;
+        }
+
+        self.save_active_bank(old_mode);
+        self.load_active_bank(new_mode);
+    }
+
+    fn save_active_bank(&mut self, mode: u32) {
+        if mode == CPSR_FIQ_MODE {
+            self.fiq_bank.copy_from_slice(&self.registers[8..15]);
+            return;
+        }
+
+        self.user_bank[..5].copy_from_slice(&self.registers[8..13]);
+        match mode {
+            CPSR_IRQ_MODE => self.irq_bank.copy_from_slice(&self.registers[13..15]),
+            CPSR_SVC_MODE => self.svc_bank.copy_from_slice(&self.registers[13..15]),
+            CPSR_ABORT_MODE => self.abort_bank.copy_from_slice(&self.registers[13..15]),
+            CPSR_UNDEFINED_MODE => self.undefined_bank.copy_from_slice(&self.registers[13..15]),
+            _ => self.user_bank[5..].copy_from_slice(&self.registers[13..15]),
+        }
+    }
+
+    fn load_active_bank(&mut self, mode: u32) {
+        if mode == CPSR_FIQ_MODE {
+            self.registers[8..15].copy_from_slice(&self.fiq_bank);
+            return;
+        }
+
+        self.registers[8..13].copy_from_slice(&self.user_bank[..5]);
+        let bank = match mode {
+            CPSR_IRQ_MODE => &self.irq_bank,
+            CPSR_SVC_MODE => &self.svc_bank,
+            CPSR_ABORT_MODE => &self.abort_bank,
+            CPSR_UNDEFINED_MODE => &self.undefined_bank,
+            _ => &self.user_bank[5..],
+        };
+        self.registers[13..15].copy_from_slice(bank);
+    }
 }
 
 fn sign_extend(value: u32, bits: u32) -> u32 {
@@ -372,6 +529,68 @@ mod tests {
 
     fn program(words: &[u16]) -> Vec<u8> {
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    fn arm_word(opcode: u32) -> Vec<u8> {
+        opcode.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn arm_pc_relative_ldr_sp_handles_the_reported_opcode() {
+        let mut rom = vec![0; 0x23C];
+        rom[0x208..0x20C].copy_from_slice(&0xE59F_D028u32.to_le_bytes());
+        rom[0x238..0x23C].copy_from_slice(&0x0300_7F00u32.to_le_bytes());
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[15] = ROM_BASE + 0x208;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[13], 0x0300_7F00);
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x20C);
+    }
+
+    #[test]
+    fn arm_immediate_word_store_supports_preindex_and_writeback() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE5A2_1004)); // STR r1, [r2, #4]!
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[1] = 0x1234_5678;
+        cpu.registers[2] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u32(0x0200_0004), 0x1234_5678);
+        assert_eq!(cpu.registers[2], 0x0200_0004);
+    }
+
+    #[test]
+    fn arm_immediate_byte_load_reads_one_byte_without_word_rotation() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE5D2_1001)); // LDRB r1, [r2, #1]
+        memory.write_u8(0x0200_0001, 0xAB);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[2] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[1], 0xAB);
+    }
+
+    #[test]
+    fn failed_arm_transfer_condition_does_not_reject_register_offset_encoding() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0x1592_1001)); // LDRNE r1, [r2, r1]
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.cpsr |= FLAG_Z;
+        cpu.registers[1] = 7;
+        cpu.registers[2] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[1], 7);
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
     }
 
     #[test]
@@ -496,20 +715,61 @@ mod tests {
     }
 
     #[test]
-    fn arm_msr_cpsr_fc_updates_control_and_flags_in_system_mode() {
+    fn arm_msr_cpsr_fc_accepts_user_mode_and_updates_flags() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&[0x00, 0xF0, 0x29, 0xE1]); // MSR CPSR_fc, r0
         let mut cpu = ThumbCpu::boot_hle();
-        cpu.registers[0] = CPSR_SYSTEM_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V;
+        cpu.registers[0] = CPSR_USER_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V;
         cpu.cpsr |= FLAG_Z;
 
         cpu.step(&mut memory).unwrap();
 
         assert_eq!(
             cpu.cpsr,
-            CPSR_SYSTEM_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V
+            CPSR_USER_MODE | (1 << 6) | FLAG_N | FLAG_C | FLAG_V
         );
         assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_msr_cpsr_fc_switches_to_user_mode() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x00, 0xF0, 0x29, 0xE1]); // MSR CPSR_fc, r0
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = CPSR_USER_MODE;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.cpsr & CPSR_MODE_MASK, CPSR_USER_MODE);
+        assert_eq!(cpu.cpsr & (FLAG_N | FLAG_Z | FLAG_C | FLAG_V), 0);
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_msr_mode_switch_restores_separate_supervisor_stack_bank() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[
+            0x00, 0xF0, 0x29, 0xE1, // MSR CPSR_fc, r0
+            0x00, 0xF0, 0x29, 0xE1, // MSR CPSR_fc, r0
+            0x00, 0xF0, 0x29, 0xE1, // MSR CPSR_fc, r0
+        ]);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = CPSR_SVC_MODE;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.cpsr & CPSR_MODE_MASK, CPSR_SVC_MODE);
+        assert_eq!(cpu.registers[13], 0);
+        cpu.registers[13] = 0x0300_7FE0;
+
+        cpu.registers[0] = CPSR_SYSTEM_MODE;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.cpsr & CPSR_MODE_MASK, CPSR_SYSTEM_MODE);
+        assert_eq!(cpu.registers[13], 0x0300_7F00);
+
+        cpu.registers[0] = CPSR_SVC_MODE;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.cpsr & CPSR_MODE_MASK, CPSR_SVC_MODE);
+        assert_eq!(cpu.registers[13], 0x0300_7FE0);
     }
 
     #[test]
@@ -517,7 +777,7 @@ mod tests {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&[0x00, 0xF0, 0x29, 0xE1]); // MSR CPSR_fc, r0
         let mut cpu = ThumbCpu::boot_hle();
-        cpu.registers[0] = 0x13 | FLAG_N;
+        cpu.registers[0] = FLAG_N;
         let original_cpsr = cpu.cpsr;
 
         assert!(matches!(

@@ -4,7 +4,7 @@ export default defineConfig({
   title: 'GBA WASM',
   description: 'The official documentation for the GBA emulator on WebAssembly.',
   lang: 'en-US',
-  base: '/gba-wasm/',
+  base: '/gba-wasm/docs/',
   lastUpdated: true,
   vite: {
     publicDir: '../public',

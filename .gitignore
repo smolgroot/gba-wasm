@@ -24,3 +24,7 @@ rust/target
 *.njsproj
 *.sln
 *.sw?
+
+
+# ROMs for tests
+rom/*

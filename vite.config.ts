@@ -2,7 +2,10 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const base = '/gba-wasm/'
+
 export default defineConfig({
+  base,
   plugins: [
     react(),
     VitePWA({
@@ -15,10 +18,10 @@ export default defineConfig({
         theme_color: '#19171e',
         background_color: '#19171e',
         display: 'standalone',
-        start_url: '/',
+        start_url: base,
         icons: [
           {
-            src: '/logo.png',
+            src: `${base}logo.png`,
             sizes: '1313x1198',
             type: 'image/png',
             purpose: 'any maskable',

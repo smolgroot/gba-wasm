@@ -127,7 +127,7 @@ function App() {
     <div className="app-shell">
       <header className="site-header">
         <Link className="brand" to="/" aria-label="GBA-WASM home">
-          <img src="/logo.png" alt="" /><span>GBA<span className="brand-dash">-</span>WASM</span>
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><span>GBA<span className="brand-dash">-</span>WASM</span>
         </Link>
         <nav className="header-nav" aria-label="Main navigation">
           <NavLink to="/saved-games" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
@@ -174,7 +174,7 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
         <div className="console-stage" aria-label="GBA-WASM console illustration">
           <div className="console">
             <div className="console-topline"><span>GBA-WASM</span><span>ADVANCE</span></div>
-            <div className="console-screen-frame"><div className="console-screen"><div className="screen-scanlines" /><img src="/logo.png" alt="GBA-WASM" /><span>PRESS START</span></div></div>
+            <div className="console-screen-frame"><div className="console-screen"><div className="screen-scanlines" /><img src={`${import.meta.env.BASE_URL}logo.png`} alt="GBA-WASM" /><span>PRESS START</span></div></div>
             <div className="console-controls">
               <div className="dpad"><span /><i /><b /><em /><strong /></div>
               <div className="console-speaker"><i /><i /><i /><i /><i /><i /></div>
