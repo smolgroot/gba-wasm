@@ -12,8 +12,8 @@ export default defineConfig({
         name: 'GBA WASM',
         short_name: 'GBAWASM',
         description: 'Retro gaming emulator shell built with Rust and WebAssembly.',
-        theme_color: '#111827',
-        background_color: '#0f172a',
+        theme_color: '#19171e',
+        background_color: '#19171e',
         display: 'standalone',
         start_url: '/',
         icons: [

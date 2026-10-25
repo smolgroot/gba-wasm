@@ -1,256 +1,225 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import {
-  AppBar,
-  Box,
-  Button,
-  Chip,
-  Container,
-  CssBaseline,
-  Paper,
-  ThemeProvider,
-  Toolbar,
-  Typography,
-  createTheme,
-} from '@mui/material'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Trash2 } from 'lucide-react'
+import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm } from './wasmBridge'
+import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 
-const THUMB_DEMO_ROM = Uint8Array.from([
-  0x01, 0x48, 0x1f, 0x21, 0x01, 0x60, 0xfe, 0xe7, 0x00, 0x00, 0x00, 0x06,
-])
-const NINTENDO_LOGO = Uint8Array.from([
-  0x24, 0xff, 0xae, 0x51, 0x69, 0x9a, 0xa2, 0x21, 0x3d, 0x84, 0x82, 0x0a, 0x84, 0xe4,
-  0x09, 0xad, 0x11, 0x24, 0x8b, 0x98, 0xc0, 0x81, 0x7f, 0x21, 0xa3, 0x52, 0xbe, 0x19,
-  0x93, 0x09, 0xce, 0x20, 0x10, 0x46, 0x4a, 0x4a, 0xf8, 0x27, 0x31, 0xec, 0x58, 0xc7,
-  0xe8, 0x33, 0x82, 0xe3, 0xce, 0xbf, 0x85, 0xf4, 0xdf, 0x94, 0xce, 0x4b, 0x09, 0xc1,
-  0x94, 0x56, 0x8a, 0xc0, 0x13, 0x72, 0xa7, 0xfc, 0x9f, 0x84, 0x4d, 0x73, 0xa3, 0xca,
-  0x9a, 0x61, 0x58, 0x97, 0xa3, 0x27, 0xfc, 0x03, 0x98, 0x76, 0x23, 0x1d, 0xc7, 0x61,
-  0x03, 0x04, 0xae, 0x56, 0xbf, 0x38, 0x84, 0x00, 0x40, 0xa7, 0x0e, 0xfd, 0xff, 0x52,
-  0xfe, 0x03, 0x6f, 0x95, 0x30, 0xf1, 0x97, 0xfb, 0xc0, 0x85, 0x60, 0xd6, 0x80, 0x25,
-  0xa9, 0x63, 0xbe, 0x03, 0x01, 0x4e, 0x38, 0xe2, 0xf9, 0xa2, 0x34, 0xff, 0xbb, 0x3e,
-  0x03, 0x44, 0x78, 0x00, 0x90, 0xcb, 0x88, 0x11, 0x3a, 0x94, 0x65, 0xc0, 0x7c, 0x63,
-  0x87, 0xf0, 0x3c, 0xaf, 0xd6, 0x25, 0xe4, 0x8b, 0x38, 0x0a, 0xac, 0x72, 0x21, 0xd4,
-  0xf8, 0x07,
-])
+type ActiveGame = { name: string; status: string; pixels: Uint8ClampedArray }
+const DOCS_URL = '/gba-wasm/'
+const SOURCE_URL = 'https://github.com/smolgroot/bunyip'
 
-function makeArmBootDemoRom() {
-  const rom = new Uint8Array(0xc4)
-  rom.set([0x2e, 0x00, 0x00, 0xea])
-  rom.set(NINTENDO_LOGO, 4)
-  rom.set(new TextEncoder().encode('SYNTHETIC   '), 0xa0)
-  rom.set(new TextEncoder().encode('TEST'), 0xac)
-  rom.set(new TextEncoder().encode('00'), 0xb0)
-  rom[0xb2] = 0x96
-  const headerSum = rom.subarray(0xa0, 0xbd).reduce((sum, byte) => (sum + byte) & 0xff, 0)
-  rom[0xbd] = (-headerSum - 0x19) & 0xff
-  rom.set([0x2a, 0x00, 0xa0, 0xe3], 0xc0)
-  return rom
+function formatSavedDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
 }
 
-const ARM_BOOT_DEMO_ROM = makeArmBootDemoRom()
-
-const theme = createTheme({
-  shape: { borderRadius: 0 },
-  components: {
-    MuiChip: {
-      styleOverrides: {
-        root: { borderRadius: 0 },
-      },
-    },
-  },
-  palette: {
-    mode: 'dark',
-    primary: { main: '#5b5b8a', contrastText: '#ffffff' },
-    background: { default: '#0f172a', paper: '#111827' },
-  },
-  typography: {
-    fontFamily: '"Press Start 2P", monospace',
-  },
-})
+function fileToImage(pixels: Uint8ClampedArray) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 240
+  canvas.height = 160
+  const context = canvas.getContext('2d')
+  if (!context) return ''
+  context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
+  return canvas.toDataURL('image/png')
+}
 
 function App() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const [status, setStatus] = useState('Loading WASM…')
-  const [ready, setReady] = useState(false)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const navigate = useNavigate()
+  const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
+  const [savedGames, setSavedGames] = useState<SavedGame[]>([])
+  const [appStatus, setAppStatus] = useState('Initializing WebAssembly')
 
   useEffect(() => {
-    let cancelled = false
-
-    async function initialize() {
-      try {
-        const wasm = await loadGbaWasm()
-        if (!cancelled) {
-          setStatus(wasm.hello('GBA'))
-          setReady(true)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setStatus(error instanceof Error ? error.message : 'WASM failed to load')
-        }
-      }
-    }
-
-    void initialize()
-
-    return () => {
-      cancelled = true
-    }
+    let mounted = true
+    void loadGbaWasm().then((wasm) => {
+      if (mounted) setAppStatus(wasm.hello('GBA'))
+    }).catch((error: unknown) => {
+      if (mounted) setAppStatus(error instanceof Error ? error.message : 'WebAssembly failed to load')
+    })
+    void getSavedGames().then((games) => {
+      if (mounted) setSavedGames(games)
+    })
+    return () => { mounted = false }
   }, [])
 
-  async function runProgram(rom: Uint8Array, name: string, steps = 1000, thumb = false) {
-    try {
-      setStatus(`Running ${name}...`)
-      const wasm = await loadGbaWasm()
-      const cartridgeInfo = thumb ? '' : ` (${wasm.inspect_rom(rom)})`
-      const pixels = thumb
-        ? wasm.run_thumb_rom(rom, steps)
-        : wasm.run_rom(rom, steps)
-      const context = canvasRef.current?.getContext('2d')
-      if (!context) throw new Error('Canvas rendering is unavailable')
-
-      const imagePixels = new Uint8ClampedArray(pixels)
-      context.putImageData(new ImageData(imagePixels, 240, 160), 0, 0)
-      setStatus(`${name}${cartridgeInfo}: executed ${steps} instructions`)
-      setReady(true)
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Thumb program failed')
-    }
+  async function executeRom(rom: Uint8Array, name: string) {
+    const wasm = await loadGbaWasm()
+    const info = wasm.inspect_rom(rom)
+    const pixels = wasm.run_rom(rom, 1000)
+    const status = `${info}: executed 1000 instructions`
+    setActiveGame({ name, status, pixels })
+    setAppStatus(status)
+    return pixels
   }
 
-  async function loadSelectedProgram(event: ChangeEvent<HTMLInputElement>) {
+  async function loadRomFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (!file) return
-
-    await runProgram(new Uint8Array(await file.arrayBuffer()), file.name)
+    try {
+      const rom = new Uint8Array(await file.arrayBuffer())
+      const name = file.name.replace(/\.(gba|bin)$/i, '')
+      const pixels = await executeRom(rom, name)
+      const game: SavedGame = {
+        id: crypto.randomUUID(),
+        name,
+        playedAt: Date.now(),
+        screenshot: fileToImage(pixels),
+        rom: rom.buffer.slice(rom.byteOffset, rom.byteOffset + rom.byteLength) as ArrayBuffer,
+      }
+      await saveGame(game)
+      setSavedGames(await getSavedGames())
+      navigate('/play')
+    } catch (error) {
+      setAppStatus(error instanceof Error ? error.message : 'Could not load this ROM')
+    }
   }
 
+  async function resumeGame(game: SavedGame) {
+    try {
+      await executeRom(new Uint8Array(game.rom), game.name)
+      navigate('/play')
+    } catch (error) {
+      setAppStatus(error instanceof Error ? error.message : 'Could not resume this game')
+    }
+  }
+
+  async function removeGame(id: string) {
+    await deleteSavedGame(id)
+    setSavedGames(await getSavedGames())
+  }
+
+  const triggerLoad = () => inputRef.current?.click()
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <AppBar position="sticky" color="transparent" elevation={0}>
-        <Toolbar sx={{ justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <Box
-              component="img"
-              src="/logo.png"
-              alt=""
-              sx={{ width: 36, height: 36, objectFit: 'contain', imageRendering: 'pixelated' }}
-            />
-            <Typography component="div" variant="h6" sx={{ fontWeight: 700 }}>
-              GBA WASM
-            </Typography>
-          </Box>
-          <Chip
-            label={ready ? 'Ready' : 'Booting'}
-            size="small"
-            color={ready ? 'success' : 'warning'}
-            variant="filled"
-          />
-        </Toolbar>
-      </AppBar>
+    <div className="app-shell">
+      <header className="site-header">
+        <Link className="brand" to="/" aria-label="GBA-WASM home">
+          <img src="/logo.png" alt="" /><span>GBA<span className="brand-dash">-</span>WASM</span>
+        </Link>
+        <nav className="header-nav" aria-label="Main navigation">
+          <NavLink to="/saved-games" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            Saved games <span className="saved-count">{savedGames.length}</span>
+          </NavLink>
+          <a className="nav-icon-link" href={DOCS_URL} aria-label="Documentation" title="Documentation"><BookOpen size={18} /></a>
+          <a className="nav-icon-link" href={SOURCE_URL} target="_blank" rel="noreferrer" aria-label="Source code" title="Source code"><CodeXml size={18} /></a>
+          <button className="header-load" onClick={triggerLoad}><ArrowDownToLine size={17} /><span>Load ROM</span></button>
+        </nav>
+        <input ref={inputRef} className="file-input" type="file" accept=".gba,.bin,application/octet-stream" onChange={(event) => void loadRomFile(event)} />
+      </header>
+      <main>
+        <Routes>
+          <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
+          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} onLoad={triggerLoad} />} />
+          <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
+          <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
+        </Routes>
+      </main>
+      <footer className="site-footer">
+        <span>GBA-WASM <span className="footer-dot">/</span> Rust + WebAssembly</span>
+        <span className="runtime-status"><i /> {appStatus}</span>
+      </footer>
+    </div>
+  )
+}
 
-      <Container maxWidth="xl" sx={{ py: 4 }}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <Paper sx={{ p: { xs: 2, md: 3 } }}>
-            <Box
-              sx={{
-                display: 'flex',
-                flexDirection: { xs: 'column', md: 'row' },
-                justifyContent: 'space-between',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                gap: 2,
-              }}
-            >
-              <Box>
-                <Typography variant="overline" color="text.secondary">
-                  Emulation shell
-                </Typography>
-                <Typography component="div" variant="h4" sx={{ fontWeight: 700 }}>
-                  Retro gaming, compiled to WebAssembly.
-                </Typography>
-              </Box>
+function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; onLoad: () => void; onResume: (game: SavedGame) => void }) {
+  return (
+    <div className="home-page">
+      <section className="hero-section">
+        <div className="hero-copy">
+          <h1>Your games.<br /><span>In your browser.</span></h1>
+          <p className="hero-description">A Game Boy Advance playground powered by Rust and WebAssembly. Bring a ROM and pick up where you left off.</p>
+          <div className="hero-actions">
+            <button className="primary-button" onClick={onLoad}><ArrowDownToLine size={18} /> Load ROM</button>
+            <Link className="secondary-button" to="/saved-games"><HardDrive size={17} /> Saved games <ChevronRight size={16} /></Link>
+          </div>
+          <div className="hero-links">
+            <a href={DOCS_URL}><BookOpen size={15} /> Documentation <ArrowLeft className="link-arrow" size={13} /></a>
+            <a href={SOURCE_URL} target="_blank" rel="noreferrer"><CodeXml size={15} /> Source code <ArrowLeft className="link-arrow" size={13} /></a>
+          </div>
+        </div>
+        <div className="console-stage" aria-label="GBA-WASM console illustration">
+          <div className="console">
+            <div className="console-topline"><span>GBA-WASM</span><span>ADVANCE</span></div>
+            <div className="console-screen-frame"><div className="console-screen"><div className="screen-scanlines" /><img src="/logo.png" alt="GBA-WASM" /><span>PRESS START</span></div></div>
+            <div className="console-controls">
+              <div className="dpad"><span /><i /><b /><em /><strong /></div>
+              <div className="console-speaker"><i /><i /><i /><i /><i /><i /></div>
+              <div className="action-buttons"><b>B</b><b>A</b></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section className="library-strip">
+        <div className="section-heading"><div><p className="eyebrow">YOUR LIBRARY</p><h2>Recently played</h2></div><Link to="/saved-games" className="text-link">View library <ChevronRight size={16} /></Link></div>
+        {savedGames.length ? (
+          <div className="recent-grid">{savedGames.slice(0, 3).map((game) => (
+            <button className="recent-game" key={game.id} onClick={() => onResume(game)}>
+              <img src={game.screenshot} alt={`${game.name} screenshot`} />
+              <span><strong>{game.name}</strong><small>{formatSavedDate(game.playedAt)}</small></span><ChevronRight size={17} />
+            </button>
+          ))}</div>
+        ) : <div className="empty-library"><Gamepad2 size={20} /><span>Your library is ready for its first game.</span></div>}
+      </section>
+    </div>
+  )
+}
 
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  Load GBA ROM
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => void runProgram(ARM_BOOT_DEMO_ROM, 'ARM boot demo', 2)}
-                >
-                  Run ARM Boot Demo
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  onClick={() => void runProgram(THUMB_DEMO_ROM, 'Thumb demo', 3, true)}
-                >
-                  Run Thumb Demo
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".gba,.bin,application/octet-stream"
-                  onChange={(event) => void loadSelectedProgram(event)}
-                  hidden
-                />
-              </Box>
-            </Box>
-          </Paper>
+function EmulatorPage({ game, status, onLoad }: { game: ActiveGame | null; status: string; onLoad: () => void }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    const context = canvasRef.current?.getContext('2d')
+    if (game && context) context.putImageData(new ImageData(new Uint8ClampedArray(game.pixels), 240, 160), 0, 0)
+  }, [game])
 
-          <Paper
-            elevation={0}
-            sx={{
-              p: 2,
-              border: '1px solid',
-              borderColor: 'divider',
-              background: 'radial-gradient(circle at top, #1f2937 0%, #0f172a 55%)',
-            }}
-          >
-            <Box
-              sx={{
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                background: '#020817',
-                minHeight: { xs: 220, md: 380 },
-                overflow: 'hidden',
-              }}
-            >
-              <canvas
-                ref={canvasRef}
-                width={240}
-                height={160}
-                style={{
-                  width: '100%',
-                  maxWidth: 720,
-                  height: 'auto',
-                  imageRendering: 'pixelated',
-                }}
-              />
-            </Box>
-          </Paper>
+  if (!game) return (
+    <section className="empty-emulator">
+      <div className="empty-emulator-icon"><Gamepad2 size={30} /></div><p className="eyebrow">NO CARTRIDGE INSERTED</p>
+      <h1>Ready when you are.</h1><p>Load a compatible ROM to open the emulator.</p>
+      <button className="primary-button" onClick={onLoad}><ArrowDownToLine size={18} /> Load ROM</button><small>{status}</small>
+    </section>
+  )
 
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              ROMs start at 0x08000000 using an HLE ARM entry. CPU, BIOS, timing, and GPU support remain incomplete; most retail ROMs will not boot yet.
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Runtime status
-            </Typography>
-            <Typography variant="body1" sx={{ mt: 1 }}>
-              {status}
-            </Typography>
-          </Paper>
-        </Box>
-      </Container>
-    </ThemeProvider>
+  return (
+    <section className="emulator-page">
+      <div className="emulator-heading"><div><p className="eyebrow">NOW PLAYING</p><h1>{game.name}</h1></div><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div>
+      <div className="emulator-layout">
+        <div className="play-surface">
+          <div className="play-surface-top"><span><i /> EMULATOR ONLINE</span><span>240 × 160</span></div>
+          <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} /></div>
+          <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
+        </div>
+        <aside className="emulator-aside"><p className="eyebrow">CARTRIDGE</p><h2>{game.name}</h2><p>ROM loaded into the WebAssembly runtime.</p>
+          <button className="secondary-button wide-button" onClick={onLoad}><ArrowDownToLine size={17} /> Replace ROM</button>
+          <div className="keyboard-note"><span>CONTROLS</span><div><kbd>Z</kbd><kbd>X</kbd><kbd>ENTER</kbd><kbd>SHIFT</kbd></div></div>
+        </aside>
+      </div>
+      <p className="emulator-disclaimer">The emulator core is in early development. CPU, BIOS, timing, and GPU support remain incomplete, so most retail ROMs will not boot yet.</p>
+    </section>
+  )
+}
+
+function SavedGamesPage({ games, onResume, onRemove }: { games: SavedGame[]; onResume: (game: SavedGame) => void; onRemove: (id: string) => void }) {
+  return (
+    <section className="saved-page">
+      <div className="saved-heading"><div><p className="eyebrow">LOCAL LIBRARY</p><h1>Saved games</h1><p>Your ROMs and play snapshots stay on this device.</p></div><span className="library-count">{String(games.length).padStart(2, '0')}<small>GAMES</small></span></div>
+      {games.length ? (
+        <div className="saved-list">{games.map((game) => (
+          <article className="saved-row" key={game.id}>
+            <button className="saved-art" onClick={() => onResume(game)} aria-label={`Play ${game.name}`}>
+              <img src={game.screenshot} alt={`${game.name} screenshot`} /><span><Gamepad2 size={15} /> PLAY</span>
+            </button>
+            <div className="saved-info"><h2>{game.name}</h2><p>Last played {formatSavedDate(game.playedAt)}</p></div>
+            <div className="saved-date"><span>LAST PLAYED</span><time dateTime={new Date(game.playedAt).toISOString()}>{formatSavedDate(game.playedAt)}</time></div>
+            <button className="delete-button" onClick={() => void onRemove(game.id)} aria-label={`Remove ${game.name}`} title="Remove game"><Trash2 size={18} /></button>
+          </article>
+        ))}</div>
+      ) : (
+        <div className="empty-saved"><div className="empty-emulator-icon"><HardDrive size={27} /></div><h2>No saved games yet</h2>
+          <p>Load a ROM and it will appear here with a screenshot and play date.</p><Link className="primary-button" to="/"><ArrowDownToLine size={18} /> Go to home</Link>
+        </div>
+      )}
+    </section>
   )
 }
 

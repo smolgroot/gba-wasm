@@ -1,19 +1,27 @@
-html, body, #root {
-  margin: 0;
-  min-height: 100%;
-  height: 100%;
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+  font-family: 'Manrope', sans-serif;
+  color: #e8e8e3;
+  background: #19171e;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --page: #19171e;
+  --panel: #232027;
+  --line: #3d3844;
+  --muted: #aaa4b0;
+  --quiet: #81788b;
+  --violet: #bb8df2;
+  --violet-light: #d9b7ff;
+  --orange: #e47d4e;
+  --mono: 'DM Mono', monospace;
 }
 
-body {
-  background: linear-gradient(180deg, #020817 0%, #0f172a 100%);
-  color: #e2e8f0;
-  font-family: 'Press Start 2P', monospace;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-canvas {
-  display: block;
-}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-width: 320px; min-height: 100%; }
+body { min-height: 100vh; background: var(--page); }
+button, a { font: inherit; }
+button { color: inherit; }
+a { color: inherit; }
+::selection { color: #21192a; background: var(--violet-light); }
