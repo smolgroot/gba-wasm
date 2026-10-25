@@ -1,6 +1,7 @@
 export type GbaWasmModule = {
   init: () => void
   hello: (name: string) => string
+  inspect_rom: (rom: Uint8Array) => string
   run_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
   run_thumb_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
 }
@@ -9,6 +10,7 @@ type GeneratedWasmModule = {
   default: () => Promise<WebAssembly.Exports>
   init: () => void
   hello: (name: string) => string
+  inspect_rom: (rom: Uint8Array) => string
   run_rom: (rom: Uint8Array, steps: number) => Uint8Array
   run_thumb_rom: (rom: Uint8Array, steps: number) => Uint8Array
 }
@@ -30,6 +32,7 @@ export async function loadGbaWasm(): Promise<GbaWasmModule> {
   const api: GbaWasmModule = {
     init: mod.init,
     hello: mod.hello,
+    inspect_rom: mod.inspect_rom,
     run_rom: (rom: Uint8Array, steps: number) =>
       new Uint8ClampedArray(mod.run_rom(rom, steps)),
     run_thumb_rom: (rom: Uint8Array, steps: number) =>

@@ -1,12 +1,42 @@
+mod cartridge;
 mod cpu;
 mod gpu;
 mod memory;
 
+pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::MemoryMap;
 
+use std::fmt;
 use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GbaError {
+    Cartridge(CartridgeError),
+    Cpu(CpuError),
+}
+
+impl fmt::Display for GbaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cartridge(error) => error.fmt(formatter),
+            Self::Cpu(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl From<CartridgeError> for GbaError {
+    fn from(error: CartridgeError) -> Self {
+        Self::Cartridge(error)
+    }
+}
+
+impl From<CpuError> for GbaError {
+    fn from(error: CpuError) -> Self {
+        Self::Cpu(error)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct GbaCore {
@@ -44,7 +74,8 @@ impl GbaCore {
         Ok(self.render_frame())
     }
 
-    pub fn run_rom(&mut self, rom: &[u8], steps: u32) -> Result<Vec<u8>, CpuError> {
+    pub fn run_rom(&mut self, rom: &[u8], steps: u32) -> Result<Vec<u8>, GbaError> {
+        CartridgeHeader::parse(rom)?;
         self.memory.load_cartridge(rom);
         self.cpu = ThumbCpu::boot_hle();
         self.cpu.run_steps(&mut self.memory, steps)?;
@@ -98,18 +129,25 @@ mod tests {
 
     #[test]
     fn arm_entry_rom_branches_and_executes_in_hle_boot_mode() {
-        let rom = [
-            0x00, 0x00, 0x00, 0xEA, // B to ROM_BASE + 8
-            0x00, 0x00, 0xA0, 0xE1, // skipped instruction
-            0x2A, 0x00, 0xA0, 0xE3, // MOV r0, #42
-        ];
+        let mut rom = cartridge::synthetic_rom(*b"TEST", [0x2E, 0x00, 0x00, 0xEA]);
+        rom[0xC0..0xC4].copy_from_slice(&[0x2A, 0x00, 0xA0, 0xE3]);
         let mut core = GbaCore::new();
 
         core.run_rom(&rom, 2).unwrap();
 
         assert_eq!(core.cpu.registers[0], 42);
-        assert_eq!(core.cpu.registers[15], ROM_BASE + 12);
+        assert_eq!(core.cpu.registers[15], ROM_BASE + 0xC4);
         assert!(!core.cpu.is_thumb());
+    }
+
+    #[test]
+    fn arm_runner_rejects_invalid_cartridge_header_before_execution() {
+        let mut core = GbaCore::new();
+
+        assert!(matches!(
+            core.run_rom(&[0; 12], 2),
+            Err(GbaError::Cartridge(CartridgeError::TruncatedHeader { .. }))
+        ));
     }
 }
 
@@ -142,5 +180,12 @@ pub fn run_rom(rom: &[u8], steps: u32) -> Result<Vec<u8>, JsValue> {
 
     let mut core = GbaCore::new();
     core.run_rom(rom, steps)
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn inspect_rom(rom: &[u8]) -> Result<String, JsValue> {
+    CartridgeHeader::parse(rom)
+        .map(|header| header.summary())
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }

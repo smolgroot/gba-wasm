@@ -4,7 +4,7 @@ The current CPU milestone is a small, testable ARM/Thumb interpreter slice, not 
 
 ## Execution model
 
-The cartridge runner maps input bytes into the ROM windows and performs a minimal HLE handoff directly to `0x08000000` in ARM System mode, with the System stack initialized to `0x03007F00`. It does not execute a BIOS image or reproduce the full BIOS boot sequence. It executes a caller-specified instruction count, then renders Mode 3 from VRAM. The WebAssembly API caps a run at 1,000,000 instructions.
+The cartridge runner accepts images from 0xC0 bytes through 32 MiB, validates the Nintendo logo, fixed header value, and complement checksum, and reports the title, game code, maker code, and version. It performs a minimal HLE handoff directly to `0x08000000` in ARM System mode, with the System stack initialized to `0x03007F00`. It does not execute a BIOS image or reproduce the full BIOS boot sequence. It executes a caller-specified instruction count, then renders Mode 3 from VRAM. The WebAssembly API caps a run at 1,000,000 instructions.
 
 The separate Thumb test runner still starts directly in Thumb state. Ordinary commercial GBA ROMs are not expected to boot because the CPU, memory devices, BIOS services, interrupts, timing, and graphics hardware are incomplete.
 
@@ -29,7 +29,7 @@ Unsupported instructions return the opcode and address rather than being treated
 
 ## Browser workflow
 
-Use **Run ARM Boot Demo** to exercise an ARM entry branch and `MOV`, **Run Thumb Demo** to exercise the Thumb path, or load a `.gba`/`.bin` file to attempt ARM-state execution from its cartridge entry. Unsupported instructions are reported in Runtime status. A standard ROM may stop immediately on an unsupported startup instruction.
+Use **Run ARM Boot Demo** to exercise an ARM entry branch and `MOV`, **Run Thumb Demo** to exercise the Thumb path, or load a `.gba`/`.bin` file to attempt ARM-state execution from its cartridge entry. The ARM runner rejects empty, truncated, oversized, or invalid headers and reports the parsed cartridge identity in Runtime status. Unsupported instructions are also reported there. A standard ROM may stop immediately on an unsupported startup instruction.
 
 ## Tests
 

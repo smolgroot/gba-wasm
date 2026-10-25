@@ -20,8 +20,8 @@ The current implementation keeps memory regions as contiguous byte arrays in `Me
 
 Mode 3 uses the first 76,800 bytes of VRAM as a 240 x 160 array of little-endian RGB555 pixels.
 
-Loaded cartridge bytes are mirrored across the three cartridge ROM windows. ROM writes are ignored; backup RAM and cartridge-specific wait states are not implemented.
+Each cartridge ROM window (`0x08000000`, `0x0A000000`, and `0x0C000000`) maps the same loaded image at offset zero. Reads past the loaded image return `0xFF`; the image is not repeated by its own length. Images are limited to 32 MiB, the size of one ROM window. ROM writes are ignored; backup RAM and cartridge-specific wait states are not implemented.
 
 ## Validation
 
-Rust tests cover EWRAM access, direct VRAM byte access, and the mirrored VRAM aperture.
+Rust tests cover EWRAM access, direct VRAM byte access, the mirrored VRAM aperture, ROM window mapping, and reads beyond a loaded image.

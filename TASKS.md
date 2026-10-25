@@ -5,6 +5,7 @@ This is the canonical implementation backlog. Each story defines observable acce
 ## Status and priority
 
 - `DONE`: acceptance criteria are met by the current implementation and tests.
+- `IN PROGRESS`: work has started; acceptance criteria are not all met yet.
 - `NEXT`: recommended next work item; do not start dependent stories before this is complete.
 - `BACKLOG`: planned, not yet selected.
 - `P0`: blocks the first credible homebrew boot milestone.
@@ -23,11 +24,26 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 
 Current CPU support is limited to ARM `B`/`BL`, `BX`, immediate `MOV`, and the Thumb instructions documented in [the CPU reference](doc/rust-core/thumb-cpu.md). BIOS execution, most CPU instructions, hardware I/O, timing, interrupts, DMA, backup saves, and most graphics features are not implemented.
 
+## Completed stories
+
+### BOOT-00: Execute a synthetic ARM/Thumb boot slice
+
+**Status:** `DONE`
+
+Acceptance criteria met:
+
+- Initialize the HLE runner in ARM System mode at the cartridge entry address with an IWRAM stack.
+- Execute a tested ARM branch and immediate `MOV`, and switch to Thumb state through `BX`.
+- Preserve the narrow Thumb demo and report unsupported opcodes with their address and value.
+- Verify the browser WASM call with built-in ARM and Thumb demos and cover the CPU behavior with Rust tests.
+
+This story proves the instruction-state handoff only; it does not establish boot compatibility with arbitrary ROMs.
+
 ## P0: Bootable homebrew foundation
 
 ### ROM-01: Validate cartridge images
 
-**Status:** `NEXT`  
+**Status:** `DONE`  
 **Priority:** `P0`
 
 As a user, I want the emulator to reject invalid or unsupported cartridge files before execution, so failures are understandable and do not look like emulator crashes.
@@ -42,7 +58,7 @@ Acceptance criteria:
 
 ### CPU-01: Correctly model CPU execution state
 
-**Status:** `BACKLOG`  
+**Status:** `NEXT`  
 **Priority:** `P0`  
 **Depends on:** ROM-01
 

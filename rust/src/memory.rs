@@ -49,8 +49,9 @@ impl MemoryMap {
             0x0500_0000..=0x05FF_FFFF => self.palette[(addr as usize - 0x0500_0000) % PALETTE_SIZE],
             0x0600_0000..=0x06FF_FFFF => self.vram[vram_index(addr)],
             0x0700_0000..=0x07FF_FFFF => self.oam[(addr as usize - 0x0700_0000) % OAM_SIZE],
-            0x0800_0000..=0x0DFF_FFFF if !self.cartridge.is_empty() => {
-                self.cartridge[(addr as usize - 0x0800_0000) % self.cartridge.len()]
+            0x0800_0000..=0x09FF_FFFF | 0x0A00_0000..=0x0BFF_FFFF | 0x0C00_0000..=0x0DFF_FFFF => {
+                let offset = (addr as usize) & 0x01FF_FFFF;
+                self.cartridge.get(offset).copied().unwrap_or(0xFF)
             }
             _ => 0,
         }
@@ -132,13 +133,15 @@ mod tests {
     }
 
     #[test]
-    fn cartridge_rom_maps_across_the_gba_rom_windows_and_is_read_only() {
+    fn cartridge_rom_is_mirrored_per_window_and_unloaded_addresses_read_ff() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&[0x12, 0x34, 0x56, 0x78]);
         memory.write_u8(0x0800_0000, 0xFF);
 
         assert_eq!(memory.read_u8(0x0800_0000), 0x12);
-        assert_eq!(memory.read_u8(0x0A00_0001), 0x34);
+        assert_eq!(memory.read_u8(0x0A00_0000), 0x12);
         assert_eq!(memory.read_u8(0x0C00_0003), 0x78);
+        assert_eq!(memory.read_u8(0x0800_0004), 0xFF);
+        assert_eq!(memory.read_u8(0x09FF_FFFF), 0xFF);
     }
 }

@@ -1,75 +1,25 @@
-# React + TypeScript + Vite
+<div align="center">
+  <img src="public/logo.png" alt="logo" width="320" />
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+  <h1>GBA WASM</h1>
 
-Currently, two official plugins are available:
+  <p>
+    Game Boy Advance emulator and browser playground built with Rust and WebAssembly.
+  </p>
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+  <p>
+    <a href="https://github.com/smolgroot/bunyip/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/smolgroot/bunyip/ci.yml?branch=master&label=CI&color=4e6a5c&labelColor=4e6a5c&logoColor=white" /></a>
+    <a href="https://github.com/smolgroot/bunyip/releases"><img alt="release" src="https://img.shields.io/github/v/release/smolgroot/bunyip?include_prereleases&label=release&color=4e6a5c&labelColor=4e6a5c&logoColor=white" /></a>
+    <a href="https://github.com/smolgroot/bunyip/pkgs/container/bunyip"><img alt="container image" src="https://img.shields.io/badge/ghcr.io-bunyip-4e6a5c?labelColor=4e6a5c&logoColor=white" /></a>
+    <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-MIT-4e6a5c?labelColor=4e6a5c&logoColor=white" /></a>
+  </p>
+</div>
 
-## React Compiler
+<hr />
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Expanding the ESLint configuration
+# GBA-WASM
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+Game Boy Advance emulator and browser playground built with Rust and WebAssembly.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
-
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
-```
+> **Note:** This project is in early development. The emulator core is not yet complete, and the browser shell is a work in progress. The current milestone focuses on the memory model and GPU framebuffer.
