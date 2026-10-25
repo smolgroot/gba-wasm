@@ -27,10 +27,12 @@ Thumb:
 
 Unsupported instructions return the opcode and address rather than being treated as no-ops. ARM data processing beyond immediate `MOV`, most ARM loads/stores, Thumb byte transfers, register-offset transfers, interrupts, and cycle timing are not implemented.
 
+The CPSR T bit selects the instruction set. ARM fetches use word-aligned addresses and Thumb fetches use halfword-aligned addresses. Architectural reads of PC use instruction address + 8 in ARM and aligned instruction address + 4 in Thumb. Unsupported-opcode errors include the execution state and leave the faulting PC and other CPU/memory state unchanged.
+
 ## Browser workflow
 
 Use **Run ARM Boot Demo** to exercise an ARM entry branch and `MOV`, **Run Thumb Demo** to exercise the Thumb path, or load a `.gba`/`.bin` file to attempt ARM-state execution from its cartridge entry. The ARM runner rejects empty, truncated, oversized, or invalid headers and reports the parsed cartridge identity in Runtime status. Unsupported instructions are also reported there. A standard ROM may stop immediately on an unsupported startup instruction.
 
 ## Tests
 
-Rust tests cover ARM boot state, ARM branch and BX mode switching, Thumb literal loads, arithmetic flags, word stores, PC-relative branches, unsupported opcodes, and ROM-to-VRAM-to-frame rendering.
+Rust tests cover ARM boot state, every ARM condition against every NZCV combination, flag preservation, ARM/Thumb fetch alignment, architectural PC reads, state transitions, unsupported-opcode state preservation, Thumb literal loads, arithmetic flags, word stores, PC-relative branches, and ROM-to-VRAM-to-frame rendering.

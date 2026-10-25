@@ -4,7 +4,7 @@ mod gpu;
 mod memory;
 
 pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
-pub use cpu::{CpuError, ROM_BASE, ThumbCpu};
+pub use cpu::{CpuError, ExecutionState, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::MemoryMap;
 

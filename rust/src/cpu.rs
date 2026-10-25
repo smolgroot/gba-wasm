@@ -10,27 +10,49 @@ const FLAG_Z: u32 = 1 << 30;
 const FLAG_C: u32 = 1 << 29;
 const FLAG_V: u32 = 1 << 28;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionState {
+    Arm,
+    Thumb,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuError {
     EmptyCartridge,
-    UnsupportedInstruction { address: u32, opcode: u16 },
-    UnsupportedArmInstruction { address: u32, opcode: u32 },
+    UnsupportedInstruction {
+        address: u32,
+        state: ExecutionState,
+        opcode: u16,
+    },
+    UnsupportedArmInstruction {
+        address: u32,
+        state: ExecutionState,
+        opcode: u32,
+    },
 }
 
 impl fmt::Display for CpuError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyCartridge => write!(formatter, "cartridge ROM is empty"),
-            Self::UnsupportedInstruction { address, opcode } => {
+            Self::UnsupportedInstruction {
+                address,
+                state,
+                opcode,
+            } => {
                 write!(
                     formatter,
-                    "unsupported Thumb opcode 0x{opcode:04X} at 0x{address:08X}"
+                    "unsupported Thumb opcode 0x{opcode:04X} at 0x{address:08X} in {state:?} state"
                 )
             }
-            Self::UnsupportedArmInstruction { address, opcode } => {
+            Self::UnsupportedArmInstruction {
+                address,
+                state,
+                opcode,
+            } => {
                 write!(
                     formatter,
-                    "unsupported ARM opcode 0x{opcode:08X} at 0x{address:08X}"
+                    "unsupported ARM opcode 0x{opcode:08X} at 0x{address:08X} in {state:?} state"
                 )
             }
         }
@@ -79,22 +101,35 @@ impl ThumbCpu {
     }
 
     pub fn step(&mut self, memory: &mut MemoryMap) -> Result<(), CpuError> {
-        if self.is_thumb() {
+        let faulting_pc = self.registers[15];
+        let result = if self.is_thumb() {
             self.step_thumb(memory)
         } else {
             self.step_arm(memory)
+        };
+        if result.is_err() {
+            self.registers[15] = faulting_pc;
         }
+        result
     }
 
     fn step_arm(&mut self, memory: &mut MemoryMap) -> Result<(), CpuError> {
-        let address = self.registers[15];
+        let address = self.registers[15] & !3;
         let opcode = memory.read_u32(address);
         self.registers[15] = address.wrapping_add(4);
         let condition = (opcode >> 28) as u8;
+        if condition == 0xF {
+            return Err(CpuError::UnsupportedArmInstruction {
+                address,
+                state: ExecutionState::Arm,
+                opcode,
+            });
+        }
 
         if opcode & 0x0FFF_FFF0 == 0x012F_FF10 {
             if self.condition_passed(condition) {
-                let target = self.registers[(opcode & 0xF) as usize];
+                let target =
+                    self.read_register((opcode & 0xF) as usize, ExecutionState::Arm, address);
                 if target & 1 != 0 {
                     self.cpsr |= CPSR_THUMB;
                     self.registers[15] = target & !1;
@@ -107,9 +142,6 @@ impl ThumbCpu {
         }
 
         if opcode & 0x0E00_0000 == 0x0A00_0000 {
-            if condition == 0xF {
-                return Err(CpuError::UnsupportedArmInstruction { address, opcode });
-            }
             if self.condition_passed(condition) {
                 if opcode & (1 << 24) != 0 {
                     self.registers[14] = address.wrapping_add(4);
@@ -121,9 +153,6 @@ impl ThumbCpu {
         }
 
         if opcode & 0x0FE0_0000 == 0x03A0_0000 {
-            if condition == 0xF {
-                return Err(CpuError::UnsupportedArmInstruction { address, opcode });
-            }
             if self.condition_passed(condition) {
                 let destination = ((opcode >> 12) & 0xF) as usize;
                 let immediate = opcode & 0xFF;
@@ -137,11 +166,15 @@ impl ThumbCpu {
             return Ok(());
         }
 
-        Err(CpuError::UnsupportedArmInstruction { address, opcode })
+        Err(CpuError::UnsupportedArmInstruction {
+            address,
+            state: ExecutionState::Arm,
+            opcode,
+        })
     }
 
     fn step_thumb(&mut self, memory: &mut MemoryMap) -> Result<(), CpuError> {
-        let address = self.registers[15];
+        let address = self.registers[15] & !1;
         let opcode = memory.read_u16(address);
         self.registers[15] = address.wrapping_add(2);
 
@@ -173,7 +206,7 @@ impl ThumbCpu {
 
         if opcode & 0xF800 == 0x4800 {
             let destination = usize::from((opcode >> 8) & 0x7);
-            let literal_address = address.wrapping_add(4) & !3;
+            let literal_address = self.read_register(15, ExecutionState::Thumb, address);
             let literal_address = literal_address.wrapping_add(u32::from(opcode & 0x00FF) * 4);
             self.registers[destination] = memory.read_u32(literal_address);
             return Ok(());
@@ -197,7 +230,11 @@ impl ThumbCpu {
         if opcode & 0xF000 == 0xD000 {
             let condition = ((opcode >> 8) & 0xF) as u8;
             if condition >= 0xE {
-                return Err(CpuError::UnsupportedInstruction { address, opcode });
+                return Err(CpuError::UnsupportedInstruction {
+                    address,
+                    state: ExecutionState::Thumb,
+                    opcode,
+                });
             }
             if self.condition_passed(condition) {
                 let offset = sign_extend(u32::from(opcode & 0x00FF), 8) << 1;
@@ -212,7 +249,11 @@ impl ThumbCpu {
             return Ok(());
         }
 
-        Err(CpuError::UnsupportedInstruction { address, opcode })
+        Err(CpuError::UnsupportedInstruction {
+            address,
+            state: ExecutionState::Thumb,
+            opcode,
+        })
     }
 
     fn set_nz(&mut self, result: u32) {
@@ -261,6 +302,22 @@ impl ThumbCpu {
             0xD => zero || negative != overflow,
             0xE => true,
             _ => false,
+        }
+    }
+
+    fn read_register(
+        &self,
+        register: usize,
+        state: ExecutionState,
+        instruction_address: u32,
+    ) -> u32 {
+        if register != 15 {
+            return self.registers[register];
+        }
+
+        match state {
+            ExecutionState::Arm => instruction_address.wrapping_add(8),
+            ExecutionState::Thumb => instruction_address.wrapping_add(4) & !3,
         }
     }
 }
@@ -319,14 +376,157 @@ mod tests {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0x0000]));
         let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x1234;
+        let original_registers = cpu.registers;
 
         assert_eq!(
             cpu.step(&mut memory),
             Err(CpuError::UnsupportedInstruction {
                 address: ROM_BASE,
+                state: ExecutionState::Thumb,
                 opcode: 0x0000,
             })
         );
+        assert_eq!(cpu.registers, original_registers);
+    }
+
+    #[test]
+    fn every_arm_condition_matches_all_nzcv_combinations() {
+        let expected: [fn(bool, bool, bool, bool) -> bool; 16] = [
+            |_n, z, _c, _v| z,
+            |_n, z, _c, _v| !z,
+            |_n, _z, c, _v| c,
+            |_n, _z, c, _v| !c,
+            |n, _z, _c, _v| n,
+            |n, _z, _c, _v| !n,
+            |_n, _z, _c, v| v,
+            |_n, _z, _c, v| !v,
+            |_n, z, c, _v| c && !z,
+            |_n, z, c, _v| !c || z,
+            |n, _z, _c, v| n == v,
+            |n, _z, _c, v| n != v,
+            |n, z, _c, v| !z && n == v,
+            |n, z, _c, v| z || n != v,
+            |_n, _z, _c, _v| true,
+            |_n, _z, _c, _v| false,
+        ];
+
+        for flags in 0..16 {
+            let n = flags & 0b1000 != 0;
+            let z = flags & 0b0100 != 0;
+            let c = flags & 0b0010 != 0;
+            let v = flags & 0b0001 != 0;
+            let mut cpu = ThumbCpu::boot_hle();
+            cpu.cpsr = CPSR_SYSTEM_MODE
+                | if n { FLAG_N } else { 0 }
+                | if z { FLAG_Z } else { 0 }
+                | if c { FLAG_C } else { 0 }
+                | if v { FLAG_V } else { 0 };
+
+            for (condition, predicate) in expected.iter().enumerate() {
+                assert_eq!(
+                    cpu.condition_passed(condition as u8),
+                    predicate(n, z, c, v),
+                    "condition {condition:X} with NZCV={flags:04b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arm_movs_updates_nz_and_preserves_cv() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[
+            0x80, 0x04, 0xB0, 0xE3, // MOVS r0, #0x80000000
+            0x00, 0x00, 0xB0, 0xE3, // MOVS r0, #0
+        ]);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.cpsr |= FLAG_C | FLAG_V;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0x8000_0000);
+        assert_ne!(cpu.cpsr & FLAG_N, 0);
+        assert_eq!(cpu.cpsr & FLAG_Z, 0);
+        assert_eq!(cpu.cpsr & (FLAG_C | FLAG_V), FLAG_C | FLAG_V);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 0);
+        assert_eq!(cpu.cpsr & (FLAG_N | FLAG_Z), FLAG_Z);
+        assert_eq!(cpu.cpsr & (FLAG_C | FLAG_V), FLAG_C | FLAG_V);
+    }
+
+    #[test]
+    fn arm_bx_reads_pc_as_instruction_address_plus_eight() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x1F, 0xFF, 0x2F, 0xE1]); // BX pc
+        let mut cpu = ThumbCpu::boot_hle();
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[15], ROM_BASE + 8);
+        assert!(!cpu.is_thumb());
+    }
+
+    #[test]
+    fn instruction_fetch_aligns_arm_and_thumb_pcs() {
+        let mut arm_memory = MemoryMap::new();
+        arm_memory.load_cartridge(&[0x2A, 0x00, 0xA0, 0xE3]); // MOV r0, #42
+        let mut arm_cpu = ThumbCpu::boot_hle();
+        arm_cpu.registers[15] = ROM_BASE + 3;
+
+        arm_cpu.step(&mut arm_memory).unwrap();
+
+        assert_eq!(arm_cpu.registers[0], 42);
+        assert_eq!(arm_cpu.registers[15], ROM_BASE + 4);
+
+        let mut thumb_memory = MemoryMap::new();
+        thumb_memory.load_cartridge(&program(&[0x202A])); // MOVS r0, #42
+        let mut thumb_cpu = ThumbCpu::new(ROM_BASE + 1);
+
+        thumb_cpu.step(&mut thumb_memory).unwrap();
+
+        assert_eq!(thumb_cpu.registers[0], 42);
+        assert_eq!(thumb_cpu.registers[15], ROM_BASE + 2);
+    }
+
+    #[test]
+    fn unsupported_arm_opcode_reports_state_and_preserves_cpu_and_memory() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x00, 0x00, 0xA0, 0xE1]);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = 0x1234;
+        let original_registers = cpu.registers;
+        let original_cpsr = cpu.cpsr;
+        let original_memory = memory.clone();
+
+        assert_eq!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedArmInstruction {
+                address: ROM_BASE,
+                state: ExecutionState::Arm,
+                opcode: 0xE1A0_0000,
+            })
+        );
+        assert_eq!(cpu.registers, original_registers);
+        assert_eq!(cpu.cpsr, original_cpsr);
+        assert_eq!(memory.cartridge, original_memory.cartridge);
+        assert_eq!(memory.ewram, original_memory.ewram);
+    }
+
+    #[test]
+    fn arm_nv_encoding_is_reported_as_unsupported_without_advancing_pc() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x10, 0xFF, 0x2F, 0xF1]); // NV BX pc
+        let mut cpu = ThumbCpu::boot_hle();
+
+        assert!(matches!(
+            cpu.step(&mut memory),
+            Err(CpuError::UnsupportedArmInstruction {
+                state: ExecutionState::Arm,
+                ..
+            })
+        ));
+        assert_eq!(cpu.registers[15], ROM_BASE);
     }
 
     #[test]

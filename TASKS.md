@@ -58,7 +58,7 @@ Acceptance criteria:
 
 ### CPU-01: Correctly model CPU execution state
 
-**Status:** `NEXT`  
+**Status:** `DONE`  
 **Priority:** `P0`  
 **Depends on:** ROM-01
 
@@ -74,7 +74,7 @@ Acceptance criteria:
 
 ### CPU-02: Expand ARM startup instruction coverage
 
-**Status:** `BACKLOG`  
+**Status:** `NEXT`  
 **Priority:** `P0`  
 **Depends on:** CPU-01
 
