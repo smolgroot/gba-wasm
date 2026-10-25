@@ -21,6 +21,7 @@ pub struct MemoryMap {
     pub oam: Vec<u8>,
     pub palette: Vec<u8>,
     pub io: Vec<u8>,
+    pub cartridge: Vec<u8>,
 }
 
 impl MemoryMap {
@@ -32,7 +33,13 @@ impl MemoryMap {
             oam: vec![0; OAM_SIZE],
             palette: vec![0; PALETTE_SIZE],
             io: vec![0; 1 * 1024],
+            cartridge: Vec::new(),
         }
+    }
+
+    pub fn load_cartridge(&mut self, data: &[u8]) {
+        self.cartridge.clear();
+        self.cartridge.extend_from_slice(data);
     }
 
     pub fn read_u8(&self, addr: u32) -> u8 {
@@ -42,6 +49,9 @@ impl MemoryMap {
             0x0500_0000..=0x05FF_FFFF => self.palette[(addr as usize - 0x0500_0000) % PALETTE_SIZE],
             0x0600_0000..=0x06FF_FFFF => self.vram[vram_index(addr)],
             0x0700_0000..=0x07FF_FFFF => self.oam[(addr as usize - 0x0700_0000) % OAM_SIZE],
+            0x0800_0000..=0x0DFF_FFFF if !self.cartridge.is_empty() => {
+                self.cartridge[(addr as usize - 0x0800_0000) % self.cartridge.len()]
+            }
             _ => 0,
         }
     }
@@ -67,6 +77,7 @@ impl MemoryMap {
                 let index = (addr as usize - 0x0700_0000) % OAM_SIZE;
                 self.oam[index] = value;
             }
+            0x0800_0000..=0x0DFF_FFFF => {}
             _ => {}
         }
     }
@@ -77,9 +88,18 @@ impl MemoryMap {
         lo | (hi << 8)
     }
 
+    pub fn read_u32(&self, addr: u32) -> u32 {
+        u32::from(self.read_u16(addr)) | (u32::from(self.read_u16(addr.wrapping_add(2))) << 16)
+    }
+
     pub fn write_u16(&mut self, addr: u32, value: u16) {
         self.write_u8(addr, (value & 0xFF) as u8);
         self.write_u8(addr.wrapping_add(1), (value >> 8) as u8);
+    }
+
+    pub fn write_u32(&mut self, addr: u32, value: u32) {
+        self.write_u16(addr, value as u16);
+        self.write_u16(addr.wrapping_add(2), (value >> 16) as u16);
     }
 }
 
@@ -109,5 +129,16 @@ mod tests {
 
         assert_eq!(memory.read_u8(0x0601_0000), 0x5A);
         assert_eq!(memory.read_u8(0x0601_8000), 0x5A);
+    }
+
+    #[test]
+    fn cartridge_rom_maps_across_the_gba_rom_windows_and_is_read_only() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0x12, 0x34, 0x56, 0x78]);
+        memory.write_u8(0x0800_0000, 0xFF);
+
+        assert_eq!(memory.read_u8(0x0800_0000), 0x12);
+        assert_eq!(memory.read_u8(0x0A00_0001), 0x34);
+        assert_eq!(memory.read_u8(0x0C00_0003), 0x78);
     }
 }

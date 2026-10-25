@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icons.svg'],
+      includeAssets: ['logo.png', 'icons.svg'],
       manifest: {
         name: 'GBA WASM',
         short_name: 'GBAWASM',
@@ -18,9 +18,9 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: '/favicon.svg',
-            sizes: 'any',
-            type: 'image/svg+xml',
+            src: '/logo.png',
+            sizes: '1313x1198',
+            type: 'image/png',
             purpose: 'any maskable',
           },
         ],

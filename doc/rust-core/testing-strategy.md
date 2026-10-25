@@ -15,6 +15,9 @@ The milestone includes tests for:
 
 - memory map read/write semantics
 - GPU pixel drawing within a framebuffer
+- Thumb instruction execution and unsupported-opcode reporting
+- ARM HLE entry state, branch, and ARM-to-Thumb exchange
+- ROM-to-VRAM-to-frame integration
 
 ## Recommended next additions
 

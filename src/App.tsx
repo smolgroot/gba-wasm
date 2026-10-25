@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import {
   AppBar,
   Box,
@@ -13,6 +13,13 @@ import {
   createTheme,
 } from '@mui/material'
 import { loadGbaWasm } from './wasmBridge'
+
+const THUMB_DEMO_ROM = Uint8Array.from([
+  0x01, 0x48, 0x1f, 0x21, 0x01, 0x60, 0xfe, 0xe7, 0x00, 0x00, 0x00, 0x06,
+])
+const ARM_BOOT_DEMO_ROM = Uint8Array.from([
+  0x00, 0x00, 0x00, 0xea, 0x00, 0x00, 0xa0, 0xe1, 0x2a, 0x00, 0xa0, 0xe3,
+])
 
 const theme = createTheme({
   shape: { borderRadius: 0 },
@@ -33,27 +40,9 @@ const theme = createTheme({
   },
 })
 
-function createMode3DemoVram() {
-  const width = 240
-  const height = 160
-  const vram = new Uint8Array(96 * 1024)
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const color = y < height / 2
-        ? x < width / 2 ? 0x001f : 0x03e0
-        : x < width / 2 ? 0x7c00 : 0x7fff
-      const offset = (y * width + x) * 2
-      vram[offset] = color & 0xff
-      vram[offset + 1] = color >> 8
-    }
-  }
-
-  return vram
-}
-
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [status, setStatus] = useState('Loading WASM…')
   const [ready, setReady] = useState(false)
 
@@ -63,25 +52,10 @@ function App() {
     async function initialize() {
       try {
         const wasm = await loadGbaWasm()
-        const message = wasm.hello('GBA')
-
         if (!cancelled) {
-          setStatus(message)
+          setStatus(wasm.hello('GBA'))
           setReady(true)
         }
-
-        const canvas = canvasRef.current
-        if (!canvas) return
-
-        const context = canvas.getContext('2d')
-        if (!context) return
-
-        const width = 240
-        const height = 160
-        const pixels = new Uint8ClampedArray(wasm.render_mode3(createMode3DemoVram()))
-        const image = new ImageData(pixels, width, height)
-
-        context.putImageData(image, 0, 0)
       } catch (error) {
         if (!cancelled) {
           setStatus(error instanceof Error ? error.message : 'WASM failed to load')
@@ -96,14 +70,49 @@ function App() {
     }
   }, [])
 
+  async function runProgram(rom: Uint8Array, name: string, steps = 1000, thumb = false) {
+    try {
+      setStatus(`Running ${name}...`)
+      const wasm = await loadGbaWasm()
+      const pixels = thumb
+        ? wasm.run_thumb_rom(rom, steps)
+        : wasm.run_rom(rom, steps)
+      const context = canvasRef.current?.getContext('2d')
+      if (!context) throw new Error('Canvas rendering is unavailable')
+
+      const imagePixels = new Uint8ClampedArray(pixels)
+      context.putImageData(new ImageData(imagePixels, 240, 160), 0, 0)
+      setStatus(`${name}: executed ${steps} instructions`)
+      setReady(true)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Thumb program failed')
+    }
+  }
+
+  async function loadSelectedProgram(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+
+    await runProgram(new Uint8Array(await file.arrayBuffer()), file.name)
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AppBar position="sticky" color="transparent" elevation={0}>
         <Toolbar sx={{ justifyContent: 'space-between' }}>
-          <Typography component="div" variant="h6" sx={{ fontWeight: 700 }}>
-            GBA WASM
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box
+              component="img"
+              src="/logo.png"
+              alt=""
+              sx={{ width: 36, height: 36, objectFit: 'contain', imageRendering: 'pixelated' }}
+            />
+            <Typography component="div" variant="h6" sx={{ fontWeight: 700 }}>
+              GBA WASM
+            </Typography>
+          </Box>
           <Chip
             label={ready ? 'Ready' : 'Booting'}
             size="small"
@@ -135,12 +144,34 @@ function App() {
               </Box>
 
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Button variant="contained" color="primary">
-                  Load ROM
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Load GBA ROM
                 </Button>
-                <Button variant="outlined" color="secondary">
-                  Pause
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={() => void runProgram(ARM_BOOT_DEMO_ROM, 'ARM boot demo', 2)}
+                >
+                  Run ARM Boot Demo
                 </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={() => void runProgram(THUMB_DEMO_ROM, 'Thumb demo', 3, true)}
+                >
+                  Run Thumb Demo
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".gba,.bin,application/octet-stream"
+                  onChange={(event) => void loadSelectedProgram(event)}
+                  hidden
+                />
               </Box>
             </Box>
           </Paper>
@@ -179,6 +210,9 @@ function App() {
           </Paper>
 
           <Paper sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              ROMs start at 0x08000000 using an HLE ARM entry. CPU, BIOS, timing, and GPU support remain incomplete; most retail ROMs will not boot yet.
+            </Typography>
             <Typography variant="body2" color="text.secondary">
               Runtime status
             </Typography>

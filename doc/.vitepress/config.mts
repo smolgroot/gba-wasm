@@ -6,7 +6,11 @@ export default defineConfig({
   lang: 'en-US',
   base: '/gba-wasm/',
   lastUpdated: true,
+  vite: {
+    publicDir: '../public',
+  },
   themeConfig: {
+    logo: '/logo.png',
     nav: [
       { text: 'Guide', link: '/guide/introduction' },
       { text: 'Architecture', link: '/architecture/overview' },
@@ -34,6 +38,7 @@ export default defineConfig({
         text: 'Rust Core',
         items: [
           { text: 'Memory Map', link: '/rust-core/memory-map' },
+          { text: 'Thumb CPU', link: '/rust-core/thumb-cpu' },
           { text: 'GPU Core', link: '/rust-core/gpu-core' },
           { text: 'Testing Strategy', link: '/rust-core/testing-strategy' },
         ],

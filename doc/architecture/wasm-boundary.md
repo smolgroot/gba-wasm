@@ -7,7 +7,7 @@ The WebAssembly boundary keeps the browser app and the emulator core separate.
 The Rust crate exposes small functions such as:
 
 - `hello(name: &str)` for smoke testing
-- `make_test_frame(width, height)` for browser rendering checks
+- `run_thumb_rom(rom, steps)` to execute a Thumb test program and return an RGBA frame
 - `init()` for runtime setup
 
 ## Data flow

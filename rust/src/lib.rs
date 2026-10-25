@@ -1,6 +1,8 @@
+mod cpu;
 mod gpu;
 mod memory;
 
+pub use cpu::{CpuError, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::MemoryMap;
 
@@ -10,6 +12,7 @@ use wasm_bindgen::prelude::*;
 pub struct GbaCore {
     pub memory: MemoryMap,
     pub gpu: GpuCore,
+    pub cpu: ThumbCpu,
 }
 
 impl GbaCore {
@@ -17,6 +20,7 @@ impl GbaCore {
         Self {
             memory: MemoryMap::new(),
             gpu: GpuCore::new(),
+            cpu: ThumbCpu::new(ROM_BASE),
         }
     }
 
@@ -31,6 +35,20 @@ impl GbaCore {
     pub fn render_frame(&mut self) -> Vec<u8> {
         self.gpu.render_mode3(&self.memory);
         self.gpu.framebuffer.clone()
+    }
+
+    pub fn run_thumb_rom(&mut self, rom: &[u8], steps: u32) -> Result<Vec<u8>, CpuError> {
+        self.memory.load_cartridge(rom);
+        self.cpu = ThumbCpu::new(ROM_BASE);
+        self.cpu.run_steps(&mut self.memory, steps)?;
+        Ok(self.render_frame())
+    }
+
+    pub fn run_rom(&mut self, rom: &[u8], steps: u32) -> Result<Vec<u8>, CpuError> {
+        self.memory.load_cartridge(rom);
+        self.cpu = ThumbCpu::boot_hle();
+        self.cpu.run_steps(&mut self.memory, steps)?;
+        Ok(self.render_frame())
     }
 }
 
@@ -64,6 +82,35 @@ mod tests {
         assert_eq!(core.gpu.framebuffer[(20 * SCREEN_WIDTH + 10) * 4 + 2], 0);
         assert_eq!(core.gpu.framebuffer[(20 * SCREEN_WIDTH + 10) * 4 + 3], 255);
     }
+
+    #[test]
+    fn thumb_rom_writes_vram_and_produces_a_mode3_frame() {
+        let rom = [
+            0x01, 0x48, 0x1F, 0x21, 0x01, 0x60, 0xFE, 0xE7, 0x00, 0x00, 0x00, 0x06,
+        ];
+        let mut core = GbaCore::new();
+
+        let frame = core.run_thumb_rom(&rom, 3).unwrap();
+
+        assert_eq!(&frame[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&frame[4..8], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn arm_entry_rom_branches_and_executes_in_hle_boot_mode() {
+        let rom = [
+            0x00, 0x00, 0x00, 0xEA, // B to ROM_BASE + 8
+            0x00, 0x00, 0xA0, 0xE1, // skipped instruction
+            0x2A, 0x00, 0xA0, 0xE3, // MOV r0, #42
+        ];
+        let mut core = GbaCore::new();
+
+        core.run_rom(&rom, 2).unwrap();
+
+        assert_eq!(core.cpu.registers[0], 42);
+        assert_eq!(core.cpu.registers[15], ROM_BASE + 12);
+        assert!(!core.cpu.is_thumb());
+    }
 }
 
 #[wasm_bindgen(start)]
@@ -77,9 +124,23 @@ pub fn hello(name: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn render_mode3(vram: &[u8]) -> Vec<u8> {
+pub fn run_thumb_rom(rom: &[u8], steps: u32) -> Result<Vec<u8>, JsValue> {
+    if steps > 1_000_000 {
+        return Err(JsValue::from_str("step limit must be at most 1,000,000"));
+    }
+
     let mut core = GbaCore::new();
-    let copy_len = vram.len().min(core.memory.vram.len());
-    core.memory.vram[..copy_len].copy_from_slice(&vram[..copy_len]);
-    core.render_frame()
+    core.run_thumb_rom(rom, steps)
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn run_rom(rom: &[u8], steps: u32) -> Result<Vec<u8>, JsValue> {
+    if steps > 1_000_000 {
+        return Err(JsValue::from_str("step limit must be at most 1,000,000"));
+    }
+
+    let mut core = GbaCore::new();
+    core.run_rom(rom, steps)
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
