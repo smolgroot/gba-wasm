@@ -15,13 +15,21 @@ import {
 import { loadGbaWasm } from './wasmBridge'
 
 const theme = createTheme({
+  shape: { borderRadius: 0 },
+  components: {
+    MuiChip: {
+      styleOverrides: {
+        root: { borderRadius: 0 },
+      },
+    },
+  },
   palette: {
     mode: 'dark',
-    primary: { main: '#7c3aed' },
+    primary: { main: '#5b5b8a', contrastText: '#ffffff' },
     background: { default: '#0f172a', paper: '#111827' },
   },
   typography: {
-    fontFamily: 'Inter, system-ui, sans-serif',
+    fontFamily: '"Press Start 2P", monospace',
   },
 })
 
@@ -88,7 +96,7 @@ function App() {
 
       <Container maxWidth="xl" sx={{ py: 4 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <Paper sx={{ p: { xs: 2, md: 3 }, borderRadius: 3 }}>
+          <Paper sx={{ p: { xs: 2, md: 3 } }}>
             <Box
               sx={{
                 display: 'flex',
@@ -122,7 +130,6 @@ function App() {
             elevation={0}
             sx={{
               p: 2,
-              borderRadius: 3,
               border: '1px solid',
               borderColor: 'divider',
               background: 'radial-gradient(circle at top, #1f2937 0%, #0f172a 55%)',
@@ -134,7 +141,6 @@ function App() {
                 justifyContent: 'center',
                 alignItems: 'center',
                 background: '#020817',
-                borderRadius: 2,
                 minHeight: { xs: 220, md: 380 },
                 overflow: 'hidden',
               }}
@@ -148,13 +154,12 @@ function App() {
                   maxWidth: 720,
                   height: 'auto',
                   imageRendering: 'pixelated',
-                  borderRadius: 8,
                 }}
               />
             </Box>
           </Paper>
 
-          <Paper sx={{ p: 2, borderRadius: 3 }}>
+          <Paper sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
               Runtime status
             </Typography>
