@@ -4,18 +4,13 @@ import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 
-type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; startupLogo: string }
+type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator }
 const DOCS_URL = '/gba-wasm/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
-const BIOS_LOGO_HUFFMAN_PREFIX = new Uint8Array([
-  0x24, 0xD4, 0x00, 0x00, 0x0F, 0x40, 0x00, 0x00, 0x00, 0x01, 0x81, 0x82,
-  0x82, 0x83, 0x0F, 0x83, 0x0C, 0xC3, 0x03, 0x83, 0x01, 0x83, 0x04, 0xC3,
-  0x08, 0x0E, 0x02, 0xC2, 0x0D, 0xC2, 0x07, 0x0B, 0x06, 0x0A, 0x05, 0x09,
-])
 
 type EmulatorSettings = {
   skipStartupSplash: boolean
@@ -33,67 +28,6 @@ function readSettings(): EmulatorSettings {
     // Use defaults when storage is unavailable or malformed.
   }
   return { skipStartupSplash: false }
-}
-
-function nintendoLogoImage(rom: Uint8Array) {
-  const compressed = new Uint8Array(BIOS_LOGO_HUFFMAN_PREFIX.length + 156)
-  compressed.set(BIOS_LOGO_HUFFMAN_PREFIX)
-  compressed.set(rom.subarray(0x04, 0xA0), BIOS_LOGO_HUFFMAN_PREFIX.length)
-
-  const decoded = new Uint8Array(212)
-  const treeRoot = 5
-  let node = treeRoot
-  let outputNibble = 0
-  let outputByte = 0
-  for (let wordOffset = 36; wordOffset + 3 < compressed.length && outputByte < decoded.length; wordOffset += 4) {
-    for (let byteOffset = 3; byteOffset >= 0 && outputByte < decoded.length; byteOffset--) {
-      for (let bit = 7; bit >= 0 && outputByte < decoded.length; bit--) {
-        const direction = (compressed[wordOffset + byteOffset] >>> bit) & 1
-        const nodeValue = compressed[node]
-        const child = (node & ~1) + (((nodeValue & 0x3F) + 1) << 1) + direction
-        if (((nodeValue << direction) & 0x80) === 0) {
-          node = child
-          continue
-        }
-        const symbol = compressed[child] & 0x0F
-        if (outputNibble === 0) {
-          decoded[outputByte] = symbol
-          outputNibble = 1
-        } else {
-          decoded[outputByte++] |= symbol << 4
-          outputNibble = 0
-        }
-        node = treeRoot
-      }
-    }
-  }
-
-  const pixels = new Uint8ClampedArray(104 * 16 * 4)
-  let previous = 0
-  for (let offset = 0; offset < 208; offset += 2) {
-    previous = (previous + decoded[4 + offset] + (decoded[5 + offset] << 8)) & 0xFFFF
-    const tileByte = previous & 0xFF
-    const tileByteHigh = previous >>> 8
-    decoded[4 + offset] = tileByte
-    decoded[5 + offset] = tileByteHigh
-  }
-  for (let y = 0; y < 16; y++) {
-    for (let x = 0; x < 104; x++) {
-      const tile = Math.floor(x / 8) + Math.floor(y / 8) * 13
-      const byte = decoded[4 + tile * 8 + (y % 8)]
-      if (((byte >>> (x % 8)) & 1) === 0) continue
-      const index = (y * 104 + x) * 4
-      pixels[index] = 33
-      pixels[index + 1] = 60
-      pixels[index + 2] = 166
-      pixels[index + 3] = 255
-    }
-  }
-  const canvas = document.createElement('canvas')
-  canvas.width = 104
-  canvas.height = 16
-  canvas.getContext('2d')?.putImageData(new ImageData(pixels, 104, 16), 0, 0)
-  return canvas.toDataURL('image/png')
 }
 
 function formatSavedDate(timestamp: number) {
@@ -191,7 +125,6 @@ function App() {
   }, [])
 
   async function executeRom(rom: Uint8Array, name: string) {
-    const startupLogo = nintendoLogoImage(rom)
     const wasm = await loadGbaWasm()
     const info = wasm.inspect_rom(rom)
     const emulator = wasm.create_emulator(rom)
@@ -205,7 +138,7 @@ function App() {
     emulatorRef.current?.free()
     emulatorRef.current = emulator
     const status = `${info}: running`
-    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator, startupLogo })
+    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator })
     setAppStatus(status)
     return pixels
   }
@@ -410,7 +343,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         <div className="play-surface">
           <div className="play-surface-top"><span><i /> EMULATOR ONLINE</span><span>240 × 160</span></div>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
-            {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={game.startupLogo} alt="Nintendo" /><small>Tap to skip</small></button>}
+            {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><strong>GBA<span>-</span>WASM</strong><small>Tap to skip</small></button>}
           </div>
           <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
         </div>
@@ -426,7 +359,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
           <label className="setting-row"><span><strong>Skip startup splash</strong><small>Start directly on the game display.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
-          <p className="settings-note">The splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
+          <p className="settings-note">The GBA-WASM splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
         </section>
       </div>}
     </section>

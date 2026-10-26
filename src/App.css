@@ -124,9 +124,11 @@ main { width: 100%; flex: 1; }
 .play-surface-bottom span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screen-well { position: relative; min-height: 480px; display: grid; place-items: center; padding: 35px; background: radial-gradient(ellipse at center, #2a3023, #11130f 73%); }
 .screen-well canvas { display: block; width: min(100%, 720px); height: auto; aspect-ratio: 3 / 2; object-fit: contain; image-rendering: pixelated; background: #090b08; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
-.startup-splash { position: absolute; inset: 35px; display: grid; place-content: center; gap: 19px; border: 0; background: #f4f4f0; color: #213ca6; cursor: pointer; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
-.startup-splash img { width: min(58vw, 420px); image-rendering: pixelated; }
-.startup-splash small { color: #6370a9; font: 10px var(--mono); }
+.startup-splash { position: absolute; inset: 35px; display: grid; place-items: center; align-content: center; gap: 16px; border: 0; background: radial-gradient(ellipse at center, #49375d, #211d29 73%); color: #e8d7fa; cursor: pointer; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
+.startup-splash img { width: clamp(62px, 11vw, 104px); height: auto; image-rendering: pixelated; filter: drop-shadow(0 4px 0 #17111f); }
+.startup-splash strong { font: 14px/1 var(--pixel); letter-spacing: .03em; }
+.startup-splash strong span { color: var(--violet); }
+.startup-splash small { color: #c5a9df; font: 10px var(--mono); }
 .emulator-aside { padding: 23px 20px; border: 1px solid #393d34; background: #1d201b; }
 .cartridge-mockup { position: relative; width: min(100%, 210px); aspect-ratio: 1; display: flex; align-items: center; justify-content: center; margin: 2px auto 23px; padding: 25px 16px 19px; border: 1px solid #a28ab9; border-radius: 8px 8px 5px 5px; background: linear-gradient(145deg, #927aaa 0%, #765d91 37%, #5e4978 80%); box-shadow: inset 2px 2px #f2e8ff45, inset -3px -4px #38294788, 5px 7px 12px #08060b7a; }
 .cartridge-mockup::before, .cartridge-mockup::after { content: ''; position: absolute; top: -1px; width: 28px; height: 16px; border: 1px solid #a28ab9; border-bottom: 0; background: #765d91; }

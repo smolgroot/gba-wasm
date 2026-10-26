@@ -10,19 +10,33 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['logo.png', 'icons.svg'],
+      includeAssets: [
+        'favicon.svg',
+        'logo.png',
+        'icons.svg',
+        'icons/icon-192.png',
+        'icons/icon-512.png',
+      ],
       manifest: {
         name: 'GBA WASM',
         short_name: 'GBAWASM',
         description: 'Retro gaming emulator shell built with Rust and WebAssembly.',
+        id: base,
         theme_color: '#19171e',
         background_color: '#19171e',
         display: 'standalone',
         start_url: base,
+        scope: base,
         icons: [
           {
-            src: `${base}logo.png`,
-            sizes: '1313x1198',
+            src: `${base}icons/icon-192.png`,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any maskable',
+          },
+          {
+            src: `${base}icons/icon-512.png`,
+            sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable',
           },

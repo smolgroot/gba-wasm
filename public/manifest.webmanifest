@@ -2,14 +2,22 @@
   "name": "GBA WASM",
   "short_name": "GBAWASM",
   "description": "Retro gaming emulator shell built with Rust and WebAssembly.",
-  "start_url": "/",
+  "id": "/gba-wasm/",
+  "start_url": "/gba-wasm/",
+  "scope": "/gba-wasm/",
   "display": "standalone",
   "background_color": "#19171e",
   "theme_color": "#19171e",
   "icons": [
     {
-      "src": "/logo.png",
-      "sizes": "1313x1198",
+      "src": "/gba-wasm/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/gba-wasm/icons/icon-512.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     }
