@@ -21,11 +21,16 @@ pub const WAITCNT_ADDR: u32 = IO_BASE + 0x204;
 pub const IME_ADDR: u32 = IO_BASE + 0x208;
 
 const DISPSTAT_IRQ_ENABLE_MASK: u8 = 0b0011_1000;
+const DISPCNT_WRITABLE_MASK: u16 = 0xFFF7;
 const DISPSTAT_VBLANK: u8 = 1 << 0;
 const DISPSTAT_HBLANK: u8 = 1 << 1;
 const DISPSTAT_VCOUNT_MATCH: u8 = 1 << 2;
 const HBLANK_START_CYCLE: u32 = 1006;
 const IRQ_TIMER0: u16 = 1 << 3;
+const IRQ_VBLANK: u16 = 1 << 0;
+const IRQ_HBLANK: u16 = 1 << 1;
+const IRQ_VCOUNT: u16 = 1 << 2;
+const IRQ_KEYPAD: u16 = 1 << 12;
 const KEYINPUT_MASK: u16 = 0x03FF;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -70,6 +75,27 @@ fn vram_index(addr: u32) -> usize {
     }
 }
 
+fn periodic_event_count(start: u32, elapsed: u64, event: u32, period: u32) -> u64 {
+    if elapsed == 0 || period == 0 {
+        return 0;
+    }
+
+    let phase = start % period;
+    let event_phase = event % period;
+    let distance = if event_phase > phase {
+        event_phase - phase
+    } else {
+        period - (phase - event_phase)
+    };
+    let distance = if distance == 0 { period } else { distance };
+
+    if elapsed < u64::from(distance) {
+        0
+    } else {
+        1 + (elapsed - u64::from(distance)) / u64::from(period)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
     pub ewram: Vec<u8>,
@@ -107,6 +133,7 @@ impl MemoryMap {
 
     pub fn advance_video_cycles(&mut self, cycles: u32) {
         self.advance_timers(u64::from(cycles));
+        self.advance_display_interrupts(self.video_cycles, u64::from(cycles));
         self.video_cycles = (self.video_cycles + cycles % CYCLES_PER_FRAME) % CYCLES_PER_FRAME;
     }
 
@@ -120,7 +147,69 @@ impl MemoryMap {
     }
 
     pub fn set_pressed_keys(&mut self, pressed: u16) {
+        let old_pressed = self.pressed_keys;
         self.pressed_keys = pressed & KEYINPUT_MASK;
+        if !self.key_condition_matches(old_pressed) && self.key_condition_matches(self.pressed_keys)
+        {
+            self.request_keypad_interrupt();
+        }
+    }
+
+    fn request_irq(&mut self, irq: u16) {
+        let pending = self.io[0x202] as u16 | (u16::from(self.io[0x203]) << 8);
+        let pending = pending | irq;
+        self.io[0x202] = pending as u8;
+        self.io[0x203] = (pending >> 8) as u8;
+    }
+
+    fn advance_display_interrupts(&mut self, start: u32, elapsed: u64) {
+        let enabled = self.io[0x004];
+        if enabled & DISPSTAT_IRQ_ENABLE_MASK == 0 {
+            return;
+        }
+
+        let frame = CYCLES_PER_FRAME;
+        if enabled & (1 << 3) != 0
+            && periodic_event_count(
+                start,
+                elapsed,
+                VISIBLE_SCANLINES * CYCLES_PER_SCANLINE,
+                frame,
+            ) != 0
+        {
+            self.request_irq(IRQ_VBLANK);
+        }
+        if enabled & (1 << 4) != 0
+            && periodic_event_count(start, elapsed, HBLANK_START_CYCLE, CYCLES_PER_SCANLINE) != 0
+        {
+            self.request_irq(IRQ_HBLANK);
+        }
+        let compare = u32::from(self.io[5]);
+        if compare < SCANLINES_PER_FRAME
+            && enabled & (1 << 5) != 0
+            && periodic_event_count(start, elapsed, compare * CYCLES_PER_SCANLINE, frame) != 0
+        {
+            self.request_irq(IRQ_VCOUNT);
+        }
+    }
+
+    fn key_condition_matches(&self, pressed: u16) -> bool {
+        let control = u16::from(self.io[0x132]) | (u16::from(self.io[0x133]) << 8);
+        let selected = control & KEYINPUT_MASK;
+        if control & (1 << 14) == 0 || selected == 0 {
+            return false;
+        }
+        if control & (1 << 15) != 0 {
+            pressed & selected == selected
+        } else {
+            pressed & selected != 0
+        }
+    }
+
+    fn request_keypad_interrupt(&mut self) {
+        if self.key_condition_matches(self.pressed_keys) {
+            self.request_irq(IRQ_KEYPAD);
+        }
     }
 
     fn advance_timers(&mut self, cycles: u64) {
@@ -171,6 +260,8 @@ impl MemoryMap {
 
         let keyinput = !self.pressed_keys & KEYINPUT_MASK;
         match offset {
+            0x000 => return self.io[offset],
+            0x001 => return self.io[offset] & (DISPCNT_WRITABLE_MASK >> 8) as u8,
             0x130 => return keyinput as u8,
             0x131 => return (keyinput >> 8) as u8,
             0x132 => return self.io[offset] & 0xFF,
@@ -206,7 +297,7 @@ impl MemoryMap {
             0x005 => compare,
             0x006 => scanline as u8,
             0x007 => 0,
-            _ => self.io[offset],
+            _ => 0,
         }
     }
 
@@ -234,7 +325,10 @@ impl MemoryMap {
             return;
         }
 
+        let key_condition_was_matched = self.key_condition_matches(self.pressed_keys);
         match offset {
+            0x000 => self.io[offset] = value,
+            0x001 => self.io[offset] = value & (DISPCNT_WRITABLE_MASK >> 8) as u8,
             0x004 => {
                 self.io[offset] = (self.io[offset] & !DISPSTAT_IRQ_ENABLE_MASK)
                     | (value & DISPSTAT_IRQ_ENABLE_MASK);
@@ -251,7 +345,13 @@ impl MemoryMap {
             0x205 => self.io[offset] = value & 0x7F,
             0x208 => self.io[offset] = value & 1,
             0x100..=0x10F => unreachable!(),
-            _ => self.io[offset] = value,
+            _ => {}
+        }
+        if matches!(offset, 0x132 | 0x133)
+            && !key_condition_was_matched
+            && self.key_condition_matches(self.pressed_keys)
+        {
+            self.request_keypad_interrupt();
         }
     }
 

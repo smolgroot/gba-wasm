@@ -18,7 +18,7 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 
 - `DONE` Rust/WASM build and browser integration.
 - `DONE` GBA-sized RAM/video storage, cartridge validation and windows, a generated ARM Mode 3 fixture, and a stateful browser frame loop.
-- `IN PROGRESS` Display status timing, family-level CPU cycle estimates, and timer/keypad/interrupt register behavior.
+- `IN PROGRESS` Display status timing and VBlank/HBlank/VCount IRQ requests, family-level CPU cycle estimates, timer behavior, and keypad OR/AND interrupt requests.
 - `DONE` A documented partial ARM/Thumb instruction set and HLE-only entry path; this is not a real BIOS implementation.
 
 Full ARM7TDMI coverage, BIOS execution, interrupt exception delivery, most I/O registers, DMA, backup saves, audio, and most graphics features are not implemented.

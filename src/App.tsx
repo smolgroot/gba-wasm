@@ -1,14 +1,100 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Settings, Trash2, X } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 
-type ActiveGame = { name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator }
+type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; startupLogo: string }
 const DOCS_URL = '/gba-wasm/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
+const STARTUP_SPLASH_DURATION_MS = 1800
+const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
+const BIOS_LOGO_HUFFMAN_PREFIX = new Uint8Array([
+  0x24, 0xD4, 0x00, 0x00, 0x0F, 0x40, 0x00, 0x00, 0x00, 0x01, 0x81, 0x82,
+  0x82, 0x83, 0x0F, 0x83, 0x0C, 0xC3, 0x03, 0x83, 0x01, 0x83, 0x04, 0xC3,
+  0x08, 0x0E, 0x02, 0xC2, 0x0D, 0xC2, 0x07, 0x0B, 0x06, 0x0A, 0x05, 0x09,
+])
+
+type EmulatorSettings = {
+  skipStartupSplash: boolean
+}
+
+function readSettings(): EmulatorSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY)
+    if (!stored) return { skipStartupSplash: false }
+    const parsed: unknown = JSON.parse(stored)
+    if (typeof parsed === 'object' && parsed !== null && 'skipStartupSplash' in parsed) {
+      return { skipStartupSplash: Boolean(parsed.skipStartupSplash) }
+    }
+  } catch {
+    // Use defaults when storage is unavailable or malformed.
+  }
+  return { skipStartupSplash: false }
+}
+
+function nintendoLogoImage(rom: Uint8Array) {
+  const compressed = new Uint8Array(BIOS_LOGO_HUFFMAN_PREFIX.length + 156)
+  compressed.set(BIOS_LOGO_HUFFMAN_PREFIX)
+  compressed.set(rom.subarray(0x04, 0xA0), BIOS_LOGO_HUFFMAN_PREFIX.length)
+
+  const decoded = new Uint8Array(212)
+  const treeRoot = 5
+  let node = treeRoot
+  let outputNibble = 0
+  let outputByte = 0
+  for (let wordOffset = 36; wordOffset + 3 < compressed.length && outputByte < decoded.length; wordOffset += 4) {
+    for (let byteOffset = 3; byteOffset >= 0 && outputByte < decoded.length; byteOffset--) {
+      for (let bit = 7; bit >= 0 && outputByte < decoded.length; bit--) {
+        const direction = (compressed[wordOffset + byteOffset] >>> bit) & 1
+        const nodeValue = compressed[node]
+        const child = (node & ~1) + (((nodeValue & 0x3F) + 1) << 1) + direction
+        if (((nodeValue << direction) & 0x80) === 0) {
+          node = child
+          continue
+        }
+        const symbol = compressed[child] & 0x0F
+        if (outputNibble === 0) {
+          decoded[outputByte] = symbol
+          outputNibble = 1
+        } else {
+          decoded[outputByte++] |= symbol << 4
+          outputNibble = 0
+        }
+        node = treeRoot
+      }
+    }
+  }
+
+  const pixels = new Uint8ClampedArray(104 * 16 * 4)
+  let previous = 0
+  for (let offset = 0; offset < 208; offset += 2) {
+    previous = (previous + decoded[4 + offset] + (decoded[5 + offset] << 8)) & 0xFFFF
+    const tileByte = previous & 0xFF
+    const tileByteHigh = previous >>> 8
+    decoded[4 + offset] = tileByte
+    decoded[5 + offset] = tileByteHigh
+  }
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 104; x++) {
+      const tile = Math.floor(x / 8) + Math.floor(y / 8) * 13
+      const byte = decoded[4 + tile * 8 + (y % 8)]
+      if (((byte >>> (x % 8)) & 1) === 0) continue
+      const index = (y * 104 + x) * 4
+      pixels[index] = 33
+      pixels[index + 1] = 60
+      pixels[index + 2] = 166
+      pixels[index + 3] = 255
+    }
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = 104
+  canvas.height = 16
+  canvas.getContext('2d')?.putImageData(new ImageData(pixels, 104, 16), 0, 0)
+  return canvas.toDataURL('image/png')
+}
 
 function formatSavedDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
@@ -70,11 +156,22 @@ function CartridgeMockup({ name }: { name: string }) {
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const emulatorRef = useRef<GbaWasmEmulator | null>(null)
+  const launchIdRef = useRef(0)
   const navigate = useNavigate()
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [savedGames, setSavedGames] = useState<SavedGame[]>([])
   const [appStatus, setAppStatus] = useState('Initializing WebAssembly')
   const [romLoadLog, setRomLoadLog] = useState<string | null>(null)
+  const [settings, setSettings] = useState<EmulatorSettings>(readSettings)
+
+  function updateSettings(nextSettings: EmulatorSettings) {
+    setSettings(nextSettings)
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings))
+    } catch {
+      // The setting remains active for this session if storage is unavailable.
+    }
+  }
 
   useEffect(() => {
     let mounted = true
@@ -94,6 +191,7 @@ function App() {
   }, [])
 
   async function executeRom(rom: Uint8Array, name: string) {
+    const startupLogo = nintendoLogoImage(rom)
     const wasm = await loadGbaWasm()
     const info = wasm.inspect_rom(rom)
     const emulator = wasm.create_emulator(rom)
@@ -107,7 +205,7 @@ function App() {
     emulatorRef.current?.free()
     emulatorRef.current = emulator
     const status = `${info}: running`
-    setActiveGame({ name, status, pixels, emulator })
+    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator, startupLogo })
     setAppStatus(status)
     return pixels
   }
@@ -191,7 +289,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
-          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} errorLog={romLoadLog} onLoad={triggerLoad} onRuntimeError={setAppStatus} />} />
+          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
         </Routes>
@@ -253,8 +351,18 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
   )
 }
 
-function EmulatorPage({ game, status, errorLog, onLoad, onRuntimeError }: { game: ActiveGame | null; status: string; errorLog: string | null; onLoad: () => void; onRuntimeError: (status: string) => void }) {
+function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showStartupSplash, setShowStartupSplash] = useState(() => !settings.skipStartupSplash)
+  const splashVisible = showStartupSplash && !settings.skipStartupSplash
+
+  useEffect(() => {
+    if (!splashVisible) return
+    const timer = window.setTimeout(() => setShowStartupSplash(false), STARTUP_SPLASH_DURATION_MS)
+    return () => window.clearTimeout(timer)
+  }, [splashVisible])
+
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
     if (!game || !context) return
@@ -284,7 +392,7 @@ function EmulatorPage({ game, status, errorLog, onLoad, onRuntimeError }: { game
       running = false
       cancelAnimationFrame(animationFrame)
     }
-  }, [game, onRuntimeError])
+  }, [game, onRuntimeError, splashVisible])
 
   if (!game) return (
     <section className="empty-emulator">
@@ -297,11 +405,13 @@ function EmulatorPage({ game, status, errorLog, onLoad, onRuntimeError }: { game
 
   return (
     <section className="emulator-page">
-      <div className="emulator-heading"><div><p className="eyebrow">NOW PLAYING</p><h1>{game.name}</h1></div><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div>
+      <div className="emulator-heading"><div><p className="eyebrow">NOW PLAYING</p><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
         <div className="play-surface">
           <div className="play-surface-top"><span><i /> EMULATOR ONLINE</span><span>240 × 160</span></div>
-          <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} /></div>
+          <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
+            {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={game.startupLogo} alt="Nintendo" /><small>Tap to skip</small></button>}
+          </div>
           <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
         </div>
         <aside className="emulator-aside">
@@ -312,6 +422,13 @@ function EmulatorPage({ game, status, errorLog, onLoad, onRuntimeError }: { game
         </aside>
       </div>
       <p className="emulator-disclaimer">The emulator core is in early development. CPU, BIOS, timing, and GPU support remain incomplete, so most retail ROMs will not boot yet.</p>
+      {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
+        <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
+          <label className="setting-row"><span><strong>Skip startup splash</strong><small>Start directly on the game display.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
+          <p className="settings-note">The splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
+        </section>
+      </div>}
     </section>
   )
 }
