@@ -16,7 +16,7 @@ The first milestone defines the addressable memory layout used by the emulator c
 
 ## Implementation notes
 
-The current implementation keeps memory regions as contiguous byte arrays in `MemoryMap`. The `read_u8` and `write_u8` methods map GBA-style addresses into storage regions. The VRAM aperture mirrors the final 32 KiB into addresses `0x06018000` through `0x0601FFFF`.
+The current implementation keeps memory regions as contiguous byte arrays in `MemoryMap`. The `read_u8` and `write_u8` methods map GBA-style addresses into storage regions. The 1 KiB modeled I/O window is visible only at `0x04000000` through `0x040003FF`; this currently includes the display-control register at `0x04000000`. Reads from other unimplemented addresses return zero and writes are ignored, a temporary approximation rather than open-bus emulation. The VRAM aperture mirrors the final 32 KiB into addresses `0x06018000` through `0x0601FFFF`.
 
 Mode 3 uses the first 76,800 bytes of VRAM as a 240 x 160 array of little-endian RGB555 pixels.
 

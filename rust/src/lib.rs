@@ -63,7 +63,7 @@ impl GbaCore {
     }
 
     pub fn render_frame(&mut self) -> Vec<u8> {
-        self.gpu.render_mode3(&self.memory);
+        self.gpu.render(&self.memory);
         self.gpu.framebuffer.clone()
     }
 
@@ -120,11 +120,45 @@ mod tests {
             0x01, 0x48, 0x1F, 0x21, 0x01, 0x60, 0xFE, 0xE7, 0x00, 0x00, 0x00, 0x06,
         ];
         let mut core = GbaCore::new();
+        core.memory.write_u16(memory::DISPCNT_ADDR, 0x0403);
 
         let frame = core.run_thumb_rom(&rom, 3).unwrap();
 
         assert_eq!(&frame[0..4], &[255, 0, 0, 255]);
         assert_eq!(&frame[4..8], &[0, 0, 0, 255]);
+    }
+
+    fn generated_arm_mode3_startup_fixture() -> Vec<u8> {
+        let mut rom = cartridge::synthetic_rom(*b"FIXT", [0x2E, 0x00, 0x00, 0xEA]);
+        let startup: [u32; 8] = [
+            0xE3A0_0406, // MOV r0, #0x06000000
+            0xE3A0_101F, // MOV r1, #0x1F
+            0xE580_1000, // STR r1, [r0]
+            0xE3A0_2404, // MOV r2, #0x04000000
+            0xE3A0_3003, // MOV r3, #3
+            0xE383_3B01, // ORR r3, r3, #0x400 (BG2 enable)
+            0xE1C2_30B0, // STRH r3, [r2]
+            0xEAFF_FFFE, // B .
+        ];
+        rom.resize(0xC0 + startup.len() * 4, 0);
+        for (index, instruction) in startup.iter().enumerate() {
+            let offset = 0xC0 + index * 4;
+            rom[offset..offset + 4].copy_from_slice(&instruction.to_le_bytes());
+        }
+        rom
+    }
+
+    #[test]
+    fn generated_arm_startup_fixture_enables_mode3_and_reaches_a_known_frame() {
+        let mut core = GbaCore::new();
+
+        let frame = core
+            .run_rom(&generated_arm_mode3_startup_fixture(), 8)
+            .unwrap();
+
+        assert_eq!(core.memory.read_u16(memory::DISPCNT_ADDR), 0x0403);
+        assert_eq!(core.cpu.registers[15], ROM_BASE + 0xDC);
+        assert_eq!(&frame[0..4], &[255, 0, 0, 255]);
     }
 
     #[test]

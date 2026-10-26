@@ -74,7 +74,7 @@ Acceptance criteria:
 
 ### CPU-02: Expand ARM startup instruction coverage
 
-**Status:** `IN PROGRESS`
+**Status:** `DONE`
 **Priority:** `P0`  
 **Depends on:** CPU-01
 
@@ -105,7 +105,7 @@ Acceptance criteria:
 
 ### BUS-01: Implement hardware-visible memory and I/O behavior
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`
 **Priority:** `P0`  
 **Depends on:** ROM-01, CPU-01
 

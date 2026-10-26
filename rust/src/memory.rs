@@ -3,6 +3,9 @@ pub const IWRAM_SIZE: usize = 32 * 1024;
 pub const VRAM_SIZE: usize = 96 * 1024;
 pub const OAM_SIZE: usize = 1 * 1024;
 pub const PALETTE_SIZE: usize = 1 * 1024;
+pub const IO_BASE: u32 = 0x0400_0000;
+pub const IO_SIZE: usize = 1 * 1024;
+pub const DISPCNT_ADDR: u32 = IO_BASE;
 
 fn vram_index(addr: u32) -> usize {
     let offset = ((addr - 0x0600_0000) as usize) & 0x1_FFFF;
@@ -32,7 +35,7 @@ impl MemoryMap {
             vram: vec![0; VRAM_SIZE],
             oam: vec![0; OAM_SIZE],
             palette: vec![0; PALETTE_SIZE],
-            io: vec![0; 1 * 1024],
+            io: vec![0; IO_SIZE],
             cartridge: Vec::new(),
         }
     }
@@ -46,6 +49,7 @@ impl MemoryMap {
         match addr {
             0x0200_0000..=0x02FF_FFFF => self.ewram[(addr as usize - 0x0200_0000) % EWRAM_SIZE],
             0x0300_0000..=0x03FF_FFFF => self.iwram[(addr as usize - 0x0300_0000) % IWRAM_SIZE],
+            IO_BASE..=0x0400_03FF => self.io[addr as usize - IO_BASE as usize],
             0x0500_0000..=0x05FF_FFFF => self.palette[(addr as usize - 0x0500_0000) % PALETTE_SIZE],
             0x0600_0000..=0x06FF_FFFF => self.vram[vram_index(addr)],
             0x0700_0000..=0x07FF_FFFF => self.oam[(addr as usize - 0x0700_0000) % OAM_SIZE],
@@ -66,6 +70,9 @@ impl MemoryMap {
             0x0300_0000..=0x03FF_FFFF => {
                 let index = (addr as usize - 0x0300_0000) % IWRAM_SIZE;
                 self.iwram[index] = value;
+            }
+            IO_BASE..=0x0400_03FF => {
+                self.io[addr as usize - IO_BASE as usize] = value;
             }
             0x0500_0000..=0x05FF_FFFF => {
                 let index = (addr as usize - 0x0500_0000) % PALETTE_SIZE;
@@ -143,5 +150,16 @@ mod tests {
         assert_eq!(memory.read_u8(0x0C00_0003), 0x78);
         assert_eq!(memory.read_u8(0x0800_0004), 0xFF);
         assert_eq!(memory.read_u8(0x09FF_FFFF), 0xFF);
+    }
+
+    #[test]
+    fn io_registers_are_visible_only_in_the_documented_io_window() {
+        let mut memory = MemoryMap::new();
+        memory.write_u16(DISPCNT_ADDR, 0x0403);
+        memory.write_u8(0x0400_0400, 0xFF);
+
+        assert_eq!(memory.read_u16(DISPCNT_ADDR), 0x0403);
+        assert_eq!(memory.read_u8(0x0400_03FF), 0);
+        assert_eq!(memory.read_u8(0x0400_0400), 0);
     }
 }

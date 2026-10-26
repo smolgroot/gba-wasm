@@ -193,6 +193,21 @@ impl ThumbCpu {
             return Ok(());
         }
 
+        if opcode & 0x0FBF_0FFF == 0x010F_0000 {
+            if self.condition_passed(condition) {
+                let destination = ((opcode >> 12) & 0xF) as usize;
+                if destination == 15 {
+                    return Err(CpuError::UnsupportedArmInstruction {
+                        address,
+                        state: ExecutionState::Arm,
+                        opcode,
+                    });
+                }
+                self.registers[destination] = self.cpsr;
+            }
+            return Ok(());
+        }
+
         if opcode & 0x0FB0_FFF0 == 0x0120_F000 {
             if self.condition_passed(condition) {
                 let writes_spsr = opcode & (1 << 22) != 0;
@@ -233,6 +248,79 @@ impl ThumbCpu {
                     self.switch_mode(updated_mode);
                 }
                 self.cpsr = updated_cpsr;
+            }
+            return Ok(());
+        }
+
+        if opcode & 0x0E00_0090 == 0x0000_0090 {
+            if !self.condition_passed(condition) {
+                return Ok(());
+            }
+
+            let pre_index = opcode & (1 << 24) != 0;
+            let add_offset = opcode & (1 << 23) != 0;
+            let immediate_offset = opcode & (1 << 22) != 0;
+            let writeback = opcode & (1 << 21) != 0;
+            let load = opcode & (1 << 20) != 0;
+            let base_register = ((opcode >> 16) & 0xF) as usize;
+            let destination = ((opcode >> 12) & 0xF) as usize;
+            let signed = opcode & (1 << 6) != 0;
+            let halfword = opcode & (1 << 5) != 0;
+
+            if (!signed && !halfword) || (!load && signed) {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            let base = self.read_register(base_register, ExecutionState::Arm, address);
+            let offset = if immediate_offset {
+                ((opcode >> 8) & 0xF) << 4 | (opcode & 0xF)
+            } else {
+                self.read_register((opcode & 0xF) as usize, ExecutionState::Arm, address)
+            };
+            let adjusted_base = if add_offset {
+                base.wrapping_add(offset)
+            } else {
+                base.wrapping_sub(offset)
+            };
+            let transfer_address = if pre_index { adjusted_base } else { base };
+
+            if (!pre_index || writeback)
+                && (base_register == 15 || (load && destination == base_register))
+            {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            if load {
+                let value = match (signed, halfword) {
+                    (false, true) => u32::from(memory.read_u16(transfer_address & !1)),
+                    (true, false) => i32::from(memory.read_u8(transfer_address) as i8) as u32,
+                    (true, true) => i32::from(memory.read_u16(transfer_address & !1) as i16) as u32,
+                    (false, false) => unreachable!(),
+                };
+                if destination == 15 {
+                    self.registers[15] = value & !3;
+                } else {
+                    self.registers[destination] = value;
+                }
+            } else {
+                let value = if destination == 15 {
+                    address.wrapping_add(12)
+                } else {
+                    self.registers[destination]
+                };
+                memory.write_u16(transfer_address & !1, value as u16);
+            }
+
+            if !pre_index || writeback {
+                self.registers[base_register] = adjusted_base;
             }
             return Ok(());
         }
@@ -1384,6 +1472,20 @@ mod tests {
     }
 
     #[test]
+    fn arm_mrs_reads_cpsr_without_changing_flags() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE10F_2000)); // MRS r2, CPSR
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.cpsr |= FLAG_N | FLAG_C;
+        let expected_cpsr = cpu.cpsr;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[2], expected_cpsr);
+        assert_eq!(cpu.cpsr, expected_cpsr);
+    }
+
+    #[test]
     fn arm_mov_lsl_immediate_updates_shifter_carry() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&arm_word(0xE1B0_0081)); // MOVS r0, r1, LSL #1
@@ -1423,6 +1525,29 @@ mod tests {
         cpu.step(&mut memory).unwrap();
 
         assert_eq!(cpu.registers[0], 0x1234_5678);
+    }
+
+    #[test]
+    fn arm_halfword_and_signed_transfers_use_their_correct_widths() {
+        let mut memory = MemoryMap::new();
+        let mut rom = arm_word(0xE1C0_10B2); // STRH r1, [r0, #2]
+        rom.extend(arm_word(0xE1D0_20F2)); // LDRSH r2, [r0, #2]
+        rom.extend(arm_word(0xE190_30D1)); // LDRSB r3, [r0, r1]
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0000_80FF;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u16(0x0200_0002), 0x80FF);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[2], 0xFFFF_80FF);
+
+        memory.write_u8(0x0200_0004, 0x80);
+        cpu.registers[1] = 4;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[3], 0xFFFF_FF80);
     }
 
     #[test]

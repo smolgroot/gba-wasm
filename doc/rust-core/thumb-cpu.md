@@ -14,8 +14,10 @@ ARM:
 
 - conditional `B` and `BL`
 - conditional `BX`
+- conditional `MRS Rd, CPSR`
 - conditional `MSR CPSR_<fields>, Rm` with valid ARM7TDMI mode changes and banked registers; direct T-bit changes remain unsupported
 - conditional immediate- or register-offset ARM byte and word `LDR`/`STR`, including pre/post indexing, writeback, and PC-relative loads
+- conditional ARM `LDRH`, `STRH`, `LDRSB`, and `LDRSH` transfers with immediate or register offsets
 - conditional ARM `LDM`/`STM` block transfers using the current register bank, including stack-style writeback and `LDM` PC loads
 - conditional ARM `SWI` dispatch for the modeled `RegisterRamReset`, `CpuSet`, and `CpuFastSet` HLE services
 - ARM data processing with immediate, immediate-shifted-register, or register-shifted-register operands: `AND`, `EOR`, `SUB`, `RSB`, `ADD`, `ADC`, `SBC`, `RSC`, `TST`, `TEQ`, `CMP`, `CMN`, `ORR`, `MOV`, `BIC`, and `MVN`
