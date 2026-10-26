@@ -181,6 +181,18 @@ impl ThumbCpu {
             return Ok(());
         }
 
+        if opcode & 0x0F00_0000 == 0x0F00_0000 {
+            if self.condition_passed(condition) {
+                self.execute_bios_call(
+                    memory,
+                    address,
+                    ExecutionState::Arm,
+                    (opcode & 0xFF) as u8,
+                )?;
+            }
+            return Ok(());
+        }
+
         if opcode & 0x0FB0_FFF0 == 0x0120_F000 {
             if self.condition_passed(condition) {
                 let writes_spsr = opcode & (1 << 22) != 0;
@@ -322,7 +334,7 @@ impl ThumbCpu {
             if !self.condition_passed(condition) {
                 return Ok(());
             }
-            if opcode & (1 << 4) != 0 {
+            if opcode & (1 << 4) != 0 && opcode & (1 << 7) != 0 {
                 return Err(CpuError::UnsupportedArmInstruction {
                     address,
                     state: ExecutionState::Arm,
@@ -336,11 +348,17 @@ impl ThumbCpu {
             let source_register = ((opcode >> 16) & 0xF) as usize;
             let value_register = (opcode & 0xF) as usize;
             let shift_type = (opcode >> 5) & 0x3;
-            let shift_amount = (opcode >> 7) & 0x1F;
             let value = self.read_register(value_register, ExecutionState::Arm, address);
             let source = self.read_register(source_register, ExecutionState::Arm, address);
-            let (operand, shifter_carry) =
-                shift_immediate(value, shift_type, shift_amount, self.cpsr & FLAG_C != 0);
+            let (operand, shifter_carry) = if opcode & (1 << 4) == 0 {
+                let shift_amount = (opcode >> 7) & 0x1F;
+                shift_immediate(value, shift_type, shift_amount, self.cpsr & FLAG_C != 0)
+            } else {
+                let shift_register_index = ((opcode >> 8) & 0xF) as usize;
+                let shift_amount =
+                    self.read_register(shift_register_index, ExecutionState::Arm, address);
+                shift_register(value, shift_amount, shift_type, self.cpsr & FLAG_C != 0)
+            };
             let carry_in = u32::from(self.cpsr & FLAG_C != 0);
             let is_test = matches!(operation, 8..=11);
 
@@ -420,7 +438,7 @@ impl ThumbCpu {
             if !self.condition_passed(condition) {
                 return Ok(());
             }
-            if opcode & (1 << 25) != 0 {
+            if opcode & (1 << 25) != 0 && opcode & (1 << 4) != 0 {
                 return Err(CpuError::UnsupportedArmInstruction {
                     address,
                     state: ExecutionState::Arm,
@@ -435,7 +453,15 @@ impl ThumbCpu {
             let base_register = ((opcode >> 16) & 0xF) as usize;
             let destination = ((opcode >> 12) & 0xF) as usize;
             let base = self.read_register(base_register, ExecutionState::Arm, address);
-            let offset = opcode & 0xFFF;
+            let offset = if opcode & (1 << 25) == 0 {
+                opcode & 0xFFF
+            } else {
+                let value_register = (opcode & 0xF) as usize;
+                let value = self.read_register(value_register, ExecutionState::Arm, address);
+                let shift_type = (opcode >> 5) & 0x3;
+                let shift_amount = (opcode >> 7) & 0x1F;
+                shift_immediate(value, shift_type, shift_amount, self.cpsr & FLAG_C != 0).0
+            };
             let adjusted_base = if add_offset {
                 base.wrapping_add(offset)
             } else {
@@ -482,6 +508,75 @@ impl ThumbCpu {
 
             if !pre_index || writeback {
                 self.registers[base_register] = adjusted_base;
+            }
+            return Ok(());
+        }
+
+        if opcode & 0x0E00_0000 == 0x0800_0000 {
+            if !self.condition_passed(condition) {
+                return Ok(());
+            }
+
+            let pre_index = opcode & (1 << 24) != 0;
+            let increment = opcode & (1 << 23) != 0;
+            let user_mode_registers = opcode & (1 << 22) != 0;
+            let writeback = opcode & (1 << 21) != 0;
+            let load = opcode & (1 << 20) != 0;
+            let base_register = ((opcode >> 16) & 0xF) as usize;
+            let register_list = opcode & 0xFFFF;
+
+            if user_mode_registers
+                || register_list == 0
+                || (writeback
+                    && (base_register == 15 || (load && register_list & (1 << base_register) != 0)))
+            {
+                return Err(CpuError::UnsupportedArmInstruction {
+                    address,
+                    state: ExecutionState::Arm,
+                    opcode,
+                });
+            }
+
+            let base = self.read_register(base_register, ExecutionState::Arm, address);
+            let register_count = register_list.count_ones();
+            let transfer_address = match (increment, pre_index) {
+                (true, false) => base,
+                (true, true) => base.wrapping_add(4),
+                (false, false) => base.wrapping_sub((register_count - 1) * 4),
+                (false, true) => base.wrapping_sub(register_count * 4),
+            };
+            let updated_base = if increment {
+                base.wrapping_add(register_count * 4)
+            } else {
+                base.wrapping_sub(register_count * 4)
+            };
+
+            let mut transfer_address = transfer_address;
+            for register in 0..16 {
+                if register_list & (1 << register) == 0 {
+                    continue;
+                }
+
+                if load {
+                    let value = memory.read_u32(transfer_address & !3);
+                    if register == 15 {
+                        self.registers[15] = value & !3;
+                    } else {
+                        self.registers[register] = value;
+                    }
+                } else {
+                    let value = if register == 15 {
+                        address.wrapping_add(12)
+                    } else {
+                        self.registers[register]
+                    };
+                    memory.write_u32(transfer_address & !3, value);
+                }
+                transfer_address = transfer_address.wrapping_add(4);
+            }
+
+            if writeback {
+                self.registers[base_register] = updated_base;
             }
             return Ok(());
         }
@@ -769,26 +864,8 @@ impl ThumbCpu {
             if condition >= 0xE {
                 if condition == 0xF {
                     let service = (opcode & 0x00FF) as u8;
-                    if service == 0x01 {
-                        if self.registers[0] & !0xFF != 0 {
-                            return Err(CpuError::UnsupportedBiosCall {
-                                address,
-                                state: ExecutionState::Thumb,
-                                service,
-                            });
-                        }
-                        self.register_ram_reset(memory, self.registers[0]);
-                        return Ok(());
-                    }
-                    if service == 0x0B {
-                        self.cpu_set(memory);
-                        return Ok(());
-                    }
-                    return Err(CpuError::UnsupportedBiosCall {
-                        address,
-                        state: ExecutionState::Thumb,
-                        service,
-                    });
+                    self.execute_bios_call(memory, address, ExecutionState::Thumb, service)?;
+                    return Ok(());
                 }
                 return Err(CpuError::UnsupportedInstruction {
                     address,
@@ -1057,6 +1134,51 @@ impl ThumbCpu {
         }
     }
 
+    fn cpu_fast_set(&self, memory: &mut MemoryMap) {
+        let control = self.registers[2];
+        let fixed_source = control & (1 << 24) != 0;
+        let word_count = (control & 0x001F_FFFF).wrapping_mul(8);
+        let mut source = self.registers[0] & !3;
+        let mut destination = self.registers[1] & !3;
+
+        for _ in 0..word_count {
+            let value = memory.read_u32(source);
+            memory.write_u32(destination, value);
+            if !fixed_source {
+                source = source.wrapping_add(4);
+            }
+            destination = destination.wrapping_add(4);
+        }
+    }
+
+    fn execute_bios_call(
+        &self,
+        memory: &mut MemoryMap,
+        address: u32,
+        state: ExecutionState,
+        service: u8,
+    ) -> Result<(), CpuError> {
+        match service {
+            0x01 if self.registers[0] & !0xFF == 0 => {
+                self.register_ram_reset(memory, self.registers[0]);
+                Ok(())
+            }
+            0x0B => {
+                self.cpu_set(memory);
+                Ok(())
+            }
+            0x0C => {
+                self.cpu_fast_set(memory);
+                Ok(())
+            }
+            _ => Err(CpuError::UnsupportedBiosCall {
+                address,
+                state,
+                service,
+            }),
+        }
+    }
+
     fn condition_passed(&self, condition: u8) -> bool {
         let negative = self.cpsr & FLAG_N != 0;
         let zero = self.cpsr & FLAG_Z != 0;
@@ -1275,6 +1397,90 @@ mod tests {
     }
 
     #[test]
+    fn arm_mov_register_shift_uses_the_low_byte_of_the_shift_register() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE1B0_0211)); // MOVS r0, r1, LSL r2
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[1] = 0x8000_0001;
+        cpu.registers[2] = 33;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0);
+        assert_ne!(cpu.cpsr & FLAG_Z, 0);
+        assert_eq!(cpu.cpsr & FLAG_C, 0);
+    }
+
+    #[test]
+    fn arm_register_offset_ldr_applies_the_encoded_shift() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE791_0102)); // LDR r0, [r1, r2, LSL #2]
+        memory.write_u32(0x0200_0010, 0x1234_5678);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[1] = 0x0200_0000;
+        cpu.registers[2] = 4;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 0x1234_5678);
+    }
+
+    #[test]
+    fn arm_swi_register_ram_reset_uses_the_same_hle_service_as_thumb() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xEF00_0001)); // SWI RegisterRamReset
+        memory.ewram.fill(0xA5);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = 1;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert!(memory.ewram.iter().all(|byte| *byte == 0));
+        assert_eq!(cpu.registers[15], ROM_BASE + 4);
+    }
+
+    #[test]
+    fn arm_stmdb_and_ldmia_transfer_registers_in_ascending_order() {
+        let mut memory = MemoryMap::new();
+        let mut rom = arm_word(0xE92D_4010); // STMDB sp!, {r4, lr}
+        rom.extend(arm_word(0xE8BD_0006)); // LDMIA sp!, {r1, r2}
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[13] = 0x0200_0100;
+        cpu.registers[4] = 0x1234_5678;
+        cpu.registers[14] = 0x9ABC_DEF0;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u32(0x0200_00F8), 0x1234_5678);
+        assert_eq!(memory.read_u32(0x0200_00FC), 0x9ABC_DEF0);
+        assert_eq!(cpu.registers[13], 0x0200_00F8);
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[1], 0x1234_5678);
+        assert_eq!(cpu.registers[2], 0x9ABC_DEF0);
+        assert_eq!(cpu.registers[13], 0x0200_0100);
+    }
+
+    #[test]
+    fn arm_ldmia_can_restore_pc_and_write_back_the_stack() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE8BD_8010)); // LDMIA sp!, {r4, pc}
+        memory.write_u32(0x0200_0100, 0x1234_5678);
+        memory.write_u32(0x0200_0104, ROM_BASE + 0x40);
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[13] = 0x0200_0100;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[4], 0x1234_5678);
+        assert_eq!(cpu.registers[13], 0x0200_0108);
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x40);
+        assert!(!cpu.is_thumb());
+    }
+
+    #[test]
     fn thumb_push_and_pop_register_list_round_trip_in_ascending_order() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0xB5F0, 0xBDF0])); // PUSH {r4-r7, lr}; POP {r4-r7, pc}
@@ -1462,6 +1668,25 @@ mod tests {
         assert_eq!(memory.read_u16(0x0200_0100), 0x55AA);
         assert_eq!(memory.read_u16(0x0200_0102), 0x55AA);
         assert_eq!(memory.read_u16(0x0200_0104), 0x55AA);
+    }
+
+    #[test]
+    fn thumb_swi_cpufastset_copies_eight_word_blocks() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF0C])); // SWI CpuFastSet
+        for word in 0..8 {
+            memory.write_u32(0x0200_0000 + word * 4, 0x1000_0000 + word);
+        }
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0200_0100;
+        cpu.registers[2] = 1;
+
+        cpu.step(&mut memory).unwrap();
+
+        for word in 0..8 {
+            assert_eq!(memory.read_u32(0x0200_0100 + word * 4), 0x1000_0000 + word);
+        }
     }
 
     #[test]
@@ -1971,7 +2196,7 @@ mod tests {
     #[test]
     fn unsupported_arm_opcode_reports_state_and_preserves_cpu_and_memory() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&[0x10, 0x00, 0xA0, 0xE1]); // MOV r0, r0, LSL r0
+        memory.load_cartridge(&[0x90, 0x00, 0xA0, 0xE1]); // unsupported multiply-family encoding
         let mut cpu = ThumbCpu::boot_hle();
         cpu.registers[0] = 0x1234;
         let original_registers = cpu.registers;
@@ -1983,7 +2208,7 @@ mod tests {
             Err(CpuError::UnsupportedArmInstruction {
                 address: ROM_BASE,
                 state: ExecutionState::Arm,
-                opcode: 0xE1A0_0010,
+                opcode: 0xE1A0_0090,
             })
         );
         assert_eq!(cpu.registers, original_registers);

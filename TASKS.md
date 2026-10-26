@@ -74,7 +74,7 @@ Acceptance criteria:
 
 ### CPU-02: Expand ARM startup instruction coverage
 
-**Status:** `NEXT`  
+**Status:** `IN PROGRESS`
 **Priority:** `P0`  
 **Depends on:** CPU-01
 
