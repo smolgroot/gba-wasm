@@ -124,7 +124,17 @@ main { width: 100%; flex: 1; }
 .screen-well { min-height: 480px; display: grid; place-items: center; padding: 35px; background: radial-gradient(ellipse at center, #2a3023, #11130f 73%); }
 .screen-well canvas { display: block; width: min(100%, 720px); height: auto; aspect-ratio: 3 / 2; object-fit: contain; image-rendering: pixelated; background: #090b08; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
 .emulator-aside { padding: 23px 20px; border: 1px solid #393d34; background: #1d201b; }
-.emulator-aside h2 { margin: 13px 0; overflow-wrap: anywhere; color: #e8eae2; font: 10px/1.8 var(--pixel); }
+.cartridge-mockup { position: relative; width: min(100%, 210px); min-height: 168px; margin: 2px auto 23px; padding: 25px 16px 19px; border: 1px solid #5b6154; border-radius: 8px 8px 5px 5px; background: linear-gradient(135deg, #596053, #343a31 58%, #292e27); box-shadow: inset 2px 2px #a7ae9a22, inset -3px -4px #10130f66, 5px 7px 12px #080a0770; }
+.cartridge-mockup::before, .cartridge-mockup::after { content: ''; position: absolute; top: -1px; width: 28px; height: 16px; border: 1px solid #5b6154; border-bottom: 0; background: #4b5247; }
+.cartridge-mockup::before { left: 15px; transform: skewX(32deg); transform-origin: bottom right; }
+.cartridge-mockup::after { right: 15px; transform: skewX(-32deg); transform-origin: bottom left; }
+.cartridge-grip { position: absolute; top: 9px; left: 50%; width: 51px; height: 5px; border-radius: 3px; background: #242a22; box-shadow: 0 1px #8b928325; transform: translateX(-50%); }
+.cartridge-label { min-height: 88px; display: flex; flex-direction: column; justify-content: center; padding: 10px 12px; border: 1px solid #8e8172; background: linear-gradient(145deg, #c3b098, #927d68); box-shadow: inset 0 1px #fff4d066; color: #332a23; text-align: center; }
+.cartridge-label span, .cartridge-label small { font: 8px var(--mono); letter-spacing: .08em; }
+.cartridge-label strong { display: -webkit-box; overflow: hidden; margin: 9px 0; color: #241e1a; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font: 7px/1.8 var(--pixel); }
+.cartridge-label small { color: #5d4b3e; font-size: 6px; }
+.cartridge-contacts { position: absolute; right: 25px; bottom: 0; left: 25px; display: flex; justify-content: center; gap: 4px; height: 10px; padding-top: 2px; background: #1d211b; }
+.cartridge-contacts i { width: 8px; height: 8px; background: linear-gradient(90deg, #c7a85c, #7b652e); }
 .emulator-aside > p:not(.eyebrow) { margin: 0 0 19px; color: #969b8f; font-size: 12px; line-height: 1.7; }
 .wide-button { width: 100%; }
 .keyboard-note { margin-top: 25px; padding-top: 19px; border-top: 1px solid #393d34; }

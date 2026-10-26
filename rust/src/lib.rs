@@ -6,7 +6,10 @@ mod memory;
 pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ExecutionState, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
-pub use memory::MemoryMap;
+pub use memory::{
+    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, MemoryMap,
+    SCANLINES_PER_FRAME, VCOUNT_ADDR, VISIBLE_SCANLINES,
+};
 
 use std::fmt;
 use wasm_bindgen::prelude::*;
@@ -60,6 +63,10 @@ impl GbaCore {
 
     pub fn write_u8(&mut self, addr: u32, value: u8) {
         self.memory.write_u8(addr, value)
+    }
+
+    pub fn advance_video_cycles(&mut self, cycles: u32) {
+        self.memory.advance_video_cycles(cycles);
     }
 
     pub fn render_frame(&mut self) -> Vec<u8> {

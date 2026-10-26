@@ -136,7 +136,7 @@ Acceptance criteria:
 
 ### TIME-01: Add bounded machine-cycle progression
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`
 **Priority:** `P0`  
 **Depends on:** CPU-01, BUS-01, PPU-01
 

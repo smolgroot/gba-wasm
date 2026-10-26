@@ -229,7 +229,13 @@ function EmulatorPage({ game, status, errorLog, onLoad }: { game: ActiveGame | n
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} /></div>
           <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
         </div>
-        <aside className="emulator-aside"><p className="eyebrow">CARTRIDGE</p><h2>{game.name}</h2><p>ROM loaded into the WebAssembly runtime.</p>
+        <aside className="emulator-aside">
+          <div className="cartridge-mockup" aria-label={`Cartridge: ${game.name}`}>
+            <div className="cartridge-grip" />
+            <div className="cartridge-label"><span>CARTRIDGE</span><strong>{game.name}</strong><small>GAME BOY ADVANCE</small></div>
+            <div className="cartridge-contacts" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
+          </div>
+          <p>ROM loaded into the WebAssembly runtime.</p>
           <button className="secondary-button wide-button" onClick={onLoad}><ArrowDownToLine size={17} /> Replace ROM</button>
           <div className="keyboard-note"><span>CONTROLS</span><div><kbd>Z</kbd><kbd>X</kbd><kbd>ENTER</kbd><kbd>SHIFT</kbd></div></div>
         </aside>

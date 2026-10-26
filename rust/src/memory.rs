@@ -6,6 +6,18 @@ pub const PALETTE_SIZE: usize = 1 * 1024;
 pub const IO_BASE: u32 = 0x0400_0000;
 pub const IO_SIZE: usize = 1 * 1024;
 pub const DISPCNT_ADDR: u32 = IO_BASE;
+pub const DISPSTAT_ADDR: u32 = IO_BASE + 0x004;
+pub const VCOUNT_ADDR: u32 = IO_BASE + 0x006;
+pub const CYCLES_PER_SCANLINE: u32 = 1232;
+pub const SCANLINES_PER_FRAME: u32 = 228;
+pub const VISIBLE_SCANLINES: u32 = 160;
+pub const CYCLES_PER_FRAME: u32 = CYCLES_PER_SCANLINE * SCANLINES_PER_FRAME;
+
+const DISPSTAT_IRQ_ENABLE_MASK: u8 = 0b0011_1000;
+const DISPSTAT_VBLANK: u8 = 1 << 0;
+const DISPSTAT_HBLANK: u8 = 1 << 1;
+const DISPSTAT_VCOUNT_MATCH: u8 = 1 << 2;
+const HBLANK_START_CYCLE: u32 = 1006;
 
 fn vram_index(addr: u32) -> usize {
     let offset = ((addr - 0x0600_0000) as usize) & 0x1_FFFF;
@@ -25,6 +37,7 @@ pub struct MemoryMap {
     pub palette: Vec<u8>,
     pub io: Vec<u8>,
     pub cartridge: Vec<u8>,
+    video_cycles: u32,
 }
 
 impl MemoryMap {
@@ -37,6 +50,7 @@ impl MemoryMap {
             palette: vec![0; PALETTE_SIZE],
             io: vec![0; IO_SIZE],
             cartridge: Vec::new(),
+            video_cycles: 0,
         }
     }
 
@@ -45,11 +59,40 @@ impl MemoryMap {
         self.cartridge.extend_from_slice(data);
     }
 
+    pub fn advance_video_cycles(&mut self, cycles: u32) {
+        self.video_cycles = (self.video_cycles + cycles % CYCLES_PER_FRAME) % CYCLES_PER_FRAME;
+    }
+
+    fn read_io(&self, offset: usize) -> u8 {
+        let scanline = self.video_cycles / CYCLES_PER_SCANLINE;
+        let scanline_cycle = self.video_cycles % CYCLES_PER_SCANLINE;
+        let compare = self.io[5];
+        let mut dispstat = self.io[4] & DISPSTAT_IRQ_ENABLE_MASK;
+
+        if scanline >= VISIBLE_SCANLINES && scanline < SCANLINES_PER_FRAME - 1 {
+            dispstat |= DISPSTAT_VBLANK;
+        }
+        if scanline_cycle >= HBLANK_START_CYCLE {
+            dispstat |= DISPSTAT_HBLANK;
+        }
+        if scanline as u8 == compare {
+            dispstat |= DISPSTAT_VCOUNT_MATCH;
+        }
+
+        match offset {
+            0x004 => dispstat,
+            0x005 => compare,
+            0x006 => scanline as u8,
+            0x007 => 0,
+            _ => self.io[offset],
+        }
+    }
+
     pub fn read_u8(&self, addr: u32) -> u8 {
         match addr {
             0x0200_0000..=0x02FF_FFFF => self.ewram[(addr as usize - 0x0200_0000) % EWRAM_SIZE],
             0x0300_0000..=0x03FF_FFFF => self.iwram[(addr as usize - 0x0300_0000) % IWRAM_SIZE],
-            IO_BASE..=0x0400_03FF => self.io[addr as usize - IO_BASE as usize],
+            IO_BASE..=0x0400_03FF => self.read_io(addr as usize - IO_BASE as usize),
             0x0500_0000..=0x05FF_FFFF => self.palette[(addr as usize - 0x0500_0000) % PALETTE_SIZE],
             0x0600_0000..=0x06FF_FFFF => self.vram[vram_index(addr)],
             0x0700_0000..=0x07FF_FFFF => self.oam[(addr as usize - 0x0700_0000) % OAM_SIZE],
@@ -72,7 +115,16 @@ impl MemoryMap {
                 self.iwram[index] = value;
             }
             IO_BASE..=0x0400_03FF => {
-                self.io[addr as usize - IO_BASE as usize] = value;
+                let offset = addr as usize - IO_BASE as usize;
+                match offset {
+                    0x004 => {
+                        self.io[offset] = (self.io[offset] & !DISPSTAT_IRQ_ENABLE_MASK)
+                            | (value & DISPSTAT_IRQ_ENABLE_MASK);
+                    }
+                    0x005 => self.io[offset] = value,
+                    0x006..=0x007 => {}
+                    _ => self.io[offset] = value,
+                }
             }
             0x0500_0000..=0x05FF_FFFF => {
                 let index = (addr as usize - 0x0500_0000) % PALETTE_SIZE;
