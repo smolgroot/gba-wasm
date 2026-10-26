@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Trash2 } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
-import { loadGbaWasm } from './wasmBridge'
+import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 
-type ActiveGame = { name: string; status: string; pixels: Uint8ClampedArray }
+type ActiveGame = { name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator }
 const DOCS_URL = '/gba-wasm/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
+const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
+const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 
 function formatSavedDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
@@ -32,8 +34,42 @@ function describeError(error: unknown) {
   }
 }
 
+function gbaBoxArtUrl(name: string) {
+  return `${GBA_BOX_ART_URL}${encodeURIComponent(name)}.png`
+}
+
+function GithubMark() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="19" height="19" fill="currentColor">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.726-4.043-1.61-4.043-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.73.083-.73 1.205.085 1.84 1.237 1.84 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.775.42-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.468-2.381 1.236-3.221-.124-.303-.536-1.524.117-3.176 0 0 1.008-.322 3.301 1.23a11.5 11.5 0 0 1 6.009 0c2.292-1.552 3.298-1.23 3.298-1.23.655 1.652.243 2.873.12 3.176.77.84 1.235 1.911 1.235 3.221 0 4.61-2.807 5.625-5.48 5.921.431.372.815 1.103.815 2.222 0 1.604-.015 2.896-.015 3.29 0 .322.216.694.825.576C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  )
+}
+
+function GameBoxArt({ name, fallback, alt, className }: { name: string; fallback: string; alt: string; className?: string }) {
+  const [showFallback, setShowFallback] = useState(false)
+  return <img className={className} src={showFallback ? fallback : gbaBoxArtUrl(name)} alt={alt} onError={() => setShowFallback(true)} />
+}
+
+function CartridgeMockup({ name }: { name: string }) {
+  const [showBoxArt, setShowBoxArt] = useState(true)
+
+  return (
+    <div className="cartridge-mockup" aria-label={`Cartridge: ${name}`}>
+      <div className="cartridge-grip" />
+      <div className="cartridge-label">
+        {showBoxArt ? (
+          <img src={gbaBoxArtUrl(name)} alt={`${name} box art`} onError={() => setShowBoxArt(false)} />
+        ) : <><span>CARTRIDGE</span><strong>{name}</strong><small>GAME BOY ADVANCE</small></>}
+      </div>
+      <div className="cartridge-contacts" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
+    </div>
+  )
+}
+
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const emulatorRef = useRef<GbaWasmEmulator | null>(null)
   const navigate = useNavigate()
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [savedGames, setSavedGames] = useState<SavedGame[]>([])
@@ -50,15 +86,28 @@ function App() {
     void getSavedGames().then((games) => {
       if (mounted) setSavedGames(games)
     })
-    return () => { mounted = false }
+    return () => {
+      mounted = false
+      emulatorRef.current?.free()
+      emulatorRef.current = null
+    }
   }, [])
 
   async function executeRom(rom: Uint8Array, name: string) {
     const wasm = await loadGbaWasm()
     const info = wasm.inspect_rom(rom)
-    const pixels = wasm.run_rom(rom, 1000)
-    const status = `${info}: executed 1000 instructions`
-    setActiveGame({ name, status, pixels })
+    const emulator = wasm.create_emulator(rom)
+    let pixels: Uint8ClampedArray
+    try {
+      pixels = emulator.step_frame()
+    } catch (error) {
+      emulator.free()
+      throw error
+    }
+    emulatorRef.current?.free()
+    emulatorRef.current = emulator
+    const status = `${info}: running`
+    setActiveGame({ name, status, pixels, emulator })
     setAppStatus(status)
     return pixels
   }
@@ -134,7 +183,7 @@ function App() {
             Saved games <span className="saved-count">{savedGames.length}</span>
           </NavLink>
           <a className="nav-icon-link" href={DOCS_URL} aria-label="Documentation" title="Documentation"><BookOpen size={18} /></a>
-          <a className="nav-icon-link" href={SOURCE_URL} target="_blank" rel="noreferrer" aria-label="Source code" title="Source code"><CodeXml size={18} /></a>
+          <a className="nav-icon-link" href={SOURCE_URL} target="_blank" rel="noreferrer" aria-label="Star GBA-WASM on GitHub" title="Star GBA-WASM on GitHub"><GithubMark /></a>
           <button className="header-load" onClick={triggerLoad}><ArrowDownToLine size={17} /><span>Load ROM</span></button>
         </nav>
         <input ref={inputRef} className="file-input" type="file" accept=".gba,.bin,application/octet-stream" onChange={(event) => void loadRomFile(event)} />
@@ -142,7 +191,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
-          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} errorLog={romLoadLog} onLoad={triggerLoad} />} />
+          <Route path="/play" element={<EmulatorPage game={activeGame} status={appStatus} errorLog={romLoadLog} onLoad={triggerLoad} onRuntimeError={setAppStatus} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
         </Routes>
@@ -194,7 +243,7 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
         {savedGames.length ? (
           <div className="recent-grid">{savedGames.slice(0, 3).map((game) => (
             <button className="recent-game" key={game.id} onClick={() => onResume(game)}>
-              <img src={game.screenshot} alt={`${game.name} screenshot`} />
+              <GameBoxArt key={game.name} name={game.name} fallback={game.screenshot} alt={`${game.name} artwork`} />
               <span><strong>{game.name}</strong><small>{formatSavedDate(game.playedAt)}</small></span><ChevronRight size={17} />
             </button>
           ))}</div>
@@ -204,12 +253,38 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
   )
 }
 
-function EmulatorPage({ game, status, errorLog, onLoad }: { game: ActiveGame | null; status: string; errorLog: string | null; onLoad: () => void }) {
+function EmulatorPage({ game, status, errorLog, onLoad, onRuntimeError }: { game: ActiveGame | null; status: string; errorLog: string | null; onLoad: () => void; onRuntimeError: (status: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
-    if (game && context) context.putImageData(new ImageData(new Uint8ClampedArray(game.pixels), 240, 160), 0, 0)
-  }, [game])
+    if (!game || !context) return
+
+    context.putImageData(new ImageData(new Uint8ClampedArray(game.pixels), 240, 160), 0, 0)
+    let animationFrame = 0
+    let running = true
+    let nextFrameAt: number | null = null
+    const advanceFrame = (timestamp: number) => {
+      if (!running) return
+      if (nextFrameAt === null || timestamp >= nextFrameAt) {
+        try {
+          const pixels = game.emulator.step_frame()
+          context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
+          nextFrameAt = timestamp + GBA_FRAME_DURATION_MS
+        } catch (error) {
+          running = false
+          onRuntimeError(error instanceof Error ? error.message : String(error))
+          return
+        }
+      }
+      animationFrame = requestAnimationFrame(advanceFrame)
+    }
+    animationFrame = requestAnimationFrame(advanceFrame)
+
+    return () => {
+      running = false
+      cancelAnimationFrame(animationFrame)
+    }
+  }, [game, onRuntimeError])
 
   if (!game) return (
     <section className="empty-emulator">
@@ -230,11 +305,7 @@ function EmulatorPage({ game, status, errorLog, onLoad }: { game: ActiveGame | n
           <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
         </div>
         <aside className="emulator-aside">
-          <div className="cartridge-mockup" aria-label={`Cartridge: ${game.name}`}>
-            <div className="cartridge-grip" />
-            <div className="cartridge-label"><span>CARTRIDGE</span><strong>{game.name}</strong><small>GAME BOY ADVANCE</small></div>
-            <div className="cartridge-contacts" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
-          </div>
+          <CartridgeMockup key={game.name} name={game.name} />
           <p>ROM loaded into the WebAssembly runtime.</p>
           <button className="secondary-button wide-button" onClick={onLoad}><ArrowDownToLine size={17} /> Replace ROM</button>
           <div className="keyboard-note"><span>CONTROLS</span><div><kbd>Z</kbd><kbd>X</kbd><kbd>ENTER</kbd><kbd>SHIFT</kbd></div></div>

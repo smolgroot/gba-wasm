@@ -12,12 +12,54 @@ pub const CYCLES_PER_SCANLINE: u32 = 1232;
 pub const SCANLINES_PER_FRAME: u32 = 228;
 pub const VISIBLE_SCANLINES: u32 = 160;
 pub const CYCLES_PER_FRAME: u32 = CYCLES_PER_SCANLINE * SCANLINES_PER_FRAME;
+pub const KEYINPUT_ADDR: u32 = IO_BASE + 0x130;
+pub const KEYCNT_ADDR: u32 = IO_BASE + 0x132;
+pub const TIMER0_ADDR: u32 = IO_BASE + 0x100;
+pub const IE_ADDR: u32 = IO_BASE + 0x200;
+pub const IF_ADDR: u32 = IO_BASE + 0x202;
+pub const WAITCNT_ADDR: u32 = IO_BASE + 0x204;
+pub const IME_ADDR: u32 = IO_BASE + 0x208;
 
 const DISPSTAT_IRQ_ENABLE_MASK: u8 = 0b0011_1000;
 const DISPSTAT_VBLANK: u8 = 1 << 0;
 const DISPSTAT_HBLANK: u8 = 1 << 1;
 const DISPSTAT_VCOUNT_MATCH: u8 = 1 << 2;
 const HBLANK_START_CYCLE: u32 = 1006;
+const IRQ_TIMER0: u16 = 1 << 3;
+const KEYINPUT_MASK: u16 = 0x03FF;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Timer {
+    reload: u16,
+    counter: u16,
+    control: u8,
+    prescaler_phase: u64,
+}
+
+impl Timer {
+    const ENABLE: u8 = 1 << 7;
+    const CASCADE: u8 = 1 << 2;
+    const IRQ_ENABLE: u8 = 1 << 6;
+
+    fn advance(&mut self, ticks: u64) -> u64 {
+        if ticks == 0 {
+            return 0;
+        }
+
+        let ticks_to_overflow = u64::from(u16::MAX) + 1 - u64::from(self.counter);
+        if ticks < ticks_to_overflow {
+            self.counter = self.counter.wrapping_add(ticks as u16);
+            return 0;
+        }
+
+        let ticks_after_overflow = ticks - ticks_to_overflow;
+        let reload_period = u64::from(u16::MAX) + 1 - u64::from(self.reload);
+        let overflows = 1 + ticks_after_overflow / reload_period;
+        let remainder = ticks_after_overflow % reload_period;
+        self.counter = self.reload.wrapping_add(remainder as u16);
+        overflows
+    }
+}
 
 fn vram_index(addr: u32) -> usize {
     let offset = ((addr - 0x0600_0000) as usize) & 0x1_FFFF;
@@ -38,6 +80,8 @@ pub struct MemoryMap {
     pub io: Vec<u8>,
     pub cartridge: Vec<u8>,
     video_cycles: u32,
+    pressed_keys: u16,
+    timers: [Timer; 4],
 }
 
 impl MemoryMap {
@@ -51,6 +95,8 @@ impl MemoryMap {
             io: vec![0; IO_SIZE],
             cartridge: Vec::new(),
             video_cycles: 0,
+            pressed_keys: 0,
+            timers: [Timer::default(); 4],
         }
     }
 
@@ -60,10 +106,86 @@ impl MemoryMap {
     }
 
     pub fn advance_video_cycles(&mut self, cycles: u32) {
+        self.advance_timers(u64::from(cycles));
         self.video_cycles = (self.video_cycles + cycles % CYCLES_PER_FRAME) % CYCLES_PER_FRAME;
     }
 
+    pub fn reset_video_clock(&mut self) {
+        self.video_cycles = 0;
+    }
+
+    pub fn reset_io_registers(&mut self) {
+        self.io.fill(0);
+        self.timers = [Timer::default(); 4];
+    }
+
+    pub fn set_pressed_keys(&mut self, pressed: u16) {
+        self.pressed_keys = pressed & KEYINPUT_MASK;
+    }
+
+    fn advance_timers(&mut self, cycles: u64) {
+        let prescalers = [1u64, 64, 256, 1024];
+        let mut prior_overflows = 0;
+        for (index, timer) in self.timers.iter_mut().enumerate() {
+            if timer.control & Timer::ENABLE == 0 {
+                prior_overflows = 0;
+                continue;
+            }
+
+            let ticks = if index > 0 && timer.control & Timer::CASCADE != 0 {
+                prior_overflows
+            } else {
+                let divisor = prescalers[usize::from(timer.control & 0x3)];
+                let accumulated = timer.prescaler_phase + cycles;
+                timer.prescaler_phase = accumulated % divisor;
+                accumulated / divisor
+            };
+            prior_overflows = timer.advance(ticks);
+
+            if prior_overflows > 0 && timer.control & Timer::IRQ_ENABLE != 0 {
+                let pending = self.io[0x202] as u16 | (u16::from(self.io[0x203]) << 8);
+                let pending = pending | (IRQ_TIMER0 << index);
+                self.io[0x202] = pending as u8;
+                self.io[0x203] = (pending >> 8) as u8;
+            }
+        }
+    }
+
+    fn timer_io_byte(&self, offset: usize) -> u8 {
+        let timer_index = (offset - 0x100) / 4;
+        let timer_byte = (offset - 0x100) % 4;
+        let timer = self.timers[timer_index];
+        match timer_byte {
+            0 => timer.counter as u8,
+            1 => (timer.counter >> 8) as u8,
+            2 => timer.control,
+            3 => 0,
+            _ => unreachable!(),
+        }
+    }
+
     fn read_io(&self, offset: usize) -> u8 {
+        if (0x100..0x110).contains(&offset) {
+            return self.timer_io_byte(offset);
+        }
+
+        let keyinput = !self.pressed_keys & KEYINPUT_MASK;
+        match offset {
+            0x130 => return keyinput as u8,
+            0x131 => return (keyinput >> 8) as u8,
+            0x132 => return self.io[offset] & 0xFF,
+            0x133 => return self.io[offset] & 0xC3,
+            0x200 => return self.io[offset] & 0xFF,
+            0x201 => return self.io[offset] & 0x3F,
+            0x202 => return self.io[offset] & 0xFF,
+            0x203 => return self.io[offset] & 0x3F,
+            0x204 => return self.io[offset] & 0xFF,
+            0x205 => return self.io[offset] & 0x7F,
+            0x208 => return self.io[offset] & 1,
+            0x209 => return 0,
+            _ => {}
+        }
+
         let scanline = self.video_cycles / CYCLES_PER_SCANLINE;
         let scanline_cycle = self.video_cycles % CYCLES_PER_SCANLINE;
         let compare = self.io[5];
@@ -85,6 +207,51 @@ impl MemoryMap {
             0x006 => scanline as u8,
             0x007 => 0,
             _ => self.io[offset],
+        }
+    }
+
+    fn write_io(&mut self, offset: usize, value: u8) {
+        if (0x100..0x110).contains(&offset) {
+            let timer_index = (offset - 0x100) / 4;
+            let timer_byte = (offset - 0x100) % 4;
+            let timer = &mut self.timers[timer_index];
+            match timer_byte {
+                0 => timer.reload = (timer.reload & 0xFF00) | u16::from(value),
+                1 => timer.reload = (timer.reload & 0x00FF) | (u16::from(value) << 8),
+                2 => {
+                    let was_enabled = timer.control & Timer::ENABLE != 0;
+                    timer.control = value & 0xC7;
+                    if !was_enabled && timer.control & Timer::ENABLE != 0 {
+                        timer.counter = timer.reload;
+                        timer.prescaler_phase = 0;
+                    } else if timer.control & Timer::ENABLE == 0 {
+                        timer.prescaler_phase = 0;
+                    }
+                }
+                3 => {}
+                _ => unreachable!(),
+            }
+            return;
+        }
+
+        match offset {
+            0x004 => {
+                self.io[offset] = (self.io[offset] & !DISPSTAT_IRQ_ENABLE_MASK)
+                    | (value & DISPSTAT_IRQ_ENABLE_MASK);
+            }
+            0x005 => self.io[offset] = value,
+            0x006..=0x007 | 0x130..=0x131 | 0x209 => {}
+            0x132 => self.io[offset] = value & 0xFF,
+            0x133 => self.io[offset] = value & 0xC3,
+            0x200 => self.io[offset] = value,
+            0x201 => self.io[offset] = value & 0x3F,
+            0x202 => self.io[offset] &= !value,
+            0x203 => self.io[offset] &= !(value & 0x3F),
+            0x204 => self.io[offset] = value,
+            0x205 => self.io[offset] = value & 0x7F,
+            0x208 => self.io[offset] = value & 1,
+            0x100..=0x10F => unreachable!(),
+            _ => self.io[offset] = value,
         }
     }
 
@@ -116,15 +283,7 @@ impl MemoryMap {
             }
             IO_BASE..=0x0400_03FF => {
                 let offset = addr as usize - IO_BASE as usize;
-                match offset {
-                    0x004 => {
-                        self.io[offset] = (self.io[offset] & !DISPSTAT_IRQ_ENABLE_MASK)
-                            | (value & DISPSTAT_IRQ_ENABLE_MASK);
-                    }
-                    0x005 => self.io[offset] = value,
-                    0x006..=0x007 => {}
-                    _ => self.io[offset] = value,
-                }
+                self.write_io(offset, value);
             }
             0x0500_0000..=0x05FF_FFFF => {
                 let index = (addr as usize - 0x0500_0000) % PALETTE_SIZE;
@@ -143,23 +302,28 @@ impl MemoryMap {
     }
 
     pub fn read_u16(&self, addr: u32) -> u16 {
-        let lo = self.read_u8(addr) as u16;
-        let hi = self.read_u8(addr.wrapping_add(1)) as u16;
+        let aligned_addr = addr & !1;
+        let lo = self.read_u8(aligned_addr) as u16;
+        let hi = self.read_u8(aligned_addr.wrapping_add(1)) as u16;
         lo | (hi << 8)
     }
 
     pub fn read_u32(&self, addr: u32) -> u32 {
-        u32::from(self.read_u16(addr)) | (u32::from(self.read_u16(addr.wrapping_add(2))) << 16)
+        let aligned_addr = addr & !3;
+        u32::from(self.read_u16(aligned_addr))
+            | (u32::from(self.read_u16(aligned_addr.wrapping_add(2))) << 16)
     }
 
     pub fn write_u16(&mut self, addr: u32, value: u16) {
-        self.write_u8(addr, (value & 0xFF) as u8);
-        self.write_u8(addr.wrapping_add(1), (value >> 8) as u8);
+        let aligned_addr = addr & !1;
+        self.write_u8(aligned_addr, (value & 0xFF) as u8);
+        self.write_u8(aligned_addr.wrapping_add(1), (value >> 8) as u8);
     }
 
     pub fn write_u32(&mut self, addr: u32, value: u32) {
-        self.write_u16(addr, value as u16);
-        self.write_u16(addr.wrapping_add(2), (value >> 16) as u16);
+        let aligned_addr = addr & !3;
+        self.write_u16(aligned_addr, value as u16);
+        self.write_u16(aligned_addr.wrapping_add(2), (value >> 16) as u16);
     }
 }
 

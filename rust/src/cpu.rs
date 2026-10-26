@@ -2,6 +2,7 @@ use crate::memory::MemoryMap;
 use std::fmt;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
+pub const MAX_FRAME_INSTRUCTIONS: u32 = 1_000_000;
 
 const CPSR_THUMB: u32 = 1 << 5;
 const CPSR_USER_MODE: u32 = 0x10;
@@ -41,6 +42,9 @@ pub enum CpuError {
         state: ExecutionState,
         service: u8,
     },
+    InstructionBudgetExceeded {
+        limit: u32,
+    },
 }
 
 impl fmt::Display for CpuError {
@@ -74,6 +78,10 @@ impl fmt::Display for CpuError {
             } => write!(
                 formatter,
                 "unsupported BIOS SWI 0x{service:02X} at 0x{address:08X} in {state:?} state"
+            ),
+            Self::InstructionBudgetExceeded { limit } => write!(
+                formatter,
+                "frame step exceeded its instruction budget of {limit}"
             ),
         }
     }
@@ -141,6 +149,11 @@ impl ThumbCpu {
     }
 
     pub fn step(&mut self, memory: &mut MemoryMap) -> Result<(), CpuError> {
+        self.step_with_cycles(memory).map(|_| ())
+    }
+
+    pub fn step_with_cycles(&mut self, memory: &mut MemoryMap) -> Result<u32, CpuError> {
+        let cycles = self.instruction_cycles(memory);
         let faulting_pc = self.registers[15];
         let result = if self.is_thumb() {
             self.step_thumb(memory)
@@ -149,8 +162,117 @@ impl ThumbCpu {
         };
         if result.is_err() {
             self.registers[15] = faulting_pc;
+            return result.map(|_| cycles);
         }
-        result
+        memory.advance_video_cycles(cycles);
+        Ok(cycles)
+    }
+
+    fn instruction_cycles(&self, memory: &MemoryMap) -> u32 {
+        if self.is_thumb() {
+            let address = self.registers[15] & !1;
+            let opcode = memory.read_u16(address);
+            return self.thumb_instruction_cycles(opcode);
+        }
+
+        let address = self.registers[15] & !3;
+        let opcode = memory.read_u32(address);
+        let condition = (opcode >> 28) as u8;
+        if condition == 0xF || !self.condition_passed(condition) {
+            return 1;
+        }
+
+        if opcode & 0x0FFF_FFF0 == 0x012F_FF10 || opcode & 0x0E00_0000 == 0x0A00_0000 {
+            return 3;
+        }
+        if opcode & 0x0F00_0000 == 0x0F00_0000 {
+            return self.bios_instruction_cycles(opcode & 0xFF);
+        }
+        if opcode & 0x0E00_0000 == 0x0800_0000 {
+            let count = (opcode & 0xFFFF).count_ones();
+            return count + if opcode & (1 << 20) != 0 { 2 } else { 1 };
+        }
+        if opcode & 0x0E00_0090 == 0x0000_0090 {
+            return if opcode & (1 << 20) != 0 { 3 } else { 2 };
+        }
+        if opcode & 0x0C00_0000 == 0x0400_0000 {
+            let is_load = opcode & (1 << 20) != 0;
+            let loads_pc = opcode & 0x0000_F000 == 0x0000_F000 && is_load;
+            return if is_load {
+                3 + u32::from(loads_pc) * 2
+            } else {
+                2
+            };
+        }
+        if opcode & 0x0C00_0000 == 0x0000_0000 && opcode & (1 << 25) == 0 {
+            let operation = (opcode >> 21) & 0xF;
+            let writes_result = !matches!(operation, 8..=11);
+            let destination = (opcode >> 12) & 0xF;
+            if writes_result && destination == 15 && opcode & (1 << 20) == 0 {
+                return 3;
+            }
+            return 1;
+        }
+        1
+    }
+
+    fn thumb_instruction_cycles(&self, opcode: u16) -> u32 {
+        if opcode & 0xF000 == 0xD000 {
+            let condition = ((opcode >> 8) & 0xF) as u8;
+            if condition == 0xF {
+                return self.bios_instruction_cycles(u32::from(opcode & 0xFF));
+            }
+            if condition < 0xE && self.condition_passed(condition) {
+                return 3;
+            }
+            return 1;
+        }
+        if opcode & 0xF800 == 0xE000 || opcode & 0xF800 == 0xF800 {
+            return 3;
+        }
+        if opcode & 0xF800 == 0xF000 {
+            return 1;
+        }
+        if opcode & 0xFE00 == 0xB400 {
+            return 1 + (opcode & 0x00FF).count_ones() + u32::from(opcode & 0x0100 != 0);
+        }
+        if opcode & 0xFE00 == 0xBC00 {
+            return 2 + (opcode & 0x00FF).count_ones() + u32::from(opcode & 0x0100 != 0);
+        }
+        if opcode & 0xF000 == 0xC000 {
+            return 1 + (opcode & 0x00FF).count_ones();
+        }
+        if matches!(opcode & 0xF000, 0x6000 | 0x7000 | 0x8000 | 0x9000) {
+            return if opcode & 0x0800 != 0 { 3 } else { 2 };
+        }
+        if opcode & 0xF800 == 0x4800 {
+            return 3;
+        }
+        if opcode & 0xFC00 == 0x4400 {
+            let operation = (opcode >> 8) & 0x3;
+            if operation == 3 {
+                return 3;
+            }
+            if operation == 0 {
+                let destination = usize::from((opcode & 0x7) | ((opcode >> 4) & 0x8));
+                if destination == 15 {
+                    return 3;
+                }
+            }
+        }
+        1
+    }
+
+    fn bios_instruction_cycles(&self, service: u32) -> u32 {
+        match service {
+            0x0B => (self.registers[2] & 0x001F_FFFF)
+                .saturating_mul(2)
+                .saturating_add(3),
+            0x0C => (self.registers[2] & 0x001F_FFFF)
+                .saturating_mul(16)
+                .saturating_add(3),
+            _ => 3,
+        }
     }
 
     fn step_arm(&mut self, memory: &mut MemoryMap) -> Result<(), CpuError> {
@@ -1194,7 +1316,7 @@ impl ThumbCpu {
             memory.oam.fill(0);
         }
         if flags & 0xE0 != 0 {
-            memory.io.fill(0);
+            memory.reset_io_registers();
         }
     }
 

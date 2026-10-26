@@ -4,6 +4,17 @@ export type GbaWasmModule = {
   inspect_rom: (rom: Uint8Array) => string
   run_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
   run_thumb_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
+  create_emulator: (rom: Uint8Array) => GbaWasmEmulator
+}
+
+export type GbaWasmEmulator = {
+  step_frame: () => Uint8ClampedArray
+  free: () => void
+}
+
+type GeneratedWasmEmulator = {
+  step_frame: () => Uint8Array
+  free: () => void
 }
 
 type GeneratedWasmModule = {
@@ -13,6 +24,7 @@ type GeneratedWasmModule = {
   inspect_rom: (rom: Uint8Array) => string
   run_rom: (rom: Uint8Array, steps: number) => Uint8Array
   run_thumb_rom: (rom: Uint8Array, steps: number) => Uint8Array
+  WasmEmulator: new (rom: Uint8Array) => GeneratedWasmEmulator
 }
 
 let wasmModule: GbaWasmModule | null = null
@@ -37,6 +49,13 @@ export async function loadGbaWasm(): Promise<GbaWasmModule> {
       new Uint8ClampedArray(mod.run_rom(rom, steps)),
     run_thumb_rom: (rom: Uint8Array, steps: number) =>
       new Uint8ClampedArray(mod.run_thumb_rom(rom, steps)),
+    create_emulator: (rom: Uint8Array) => {
+      const emulator = new mod.WasmEmulator(rom)
+      return {
+        step_frame: () => new Uint8ClampedArray(emulator.step_frame()),
+        free: () => emulator.free(),
+      }
+    },
   }
 
   wasmModule = api

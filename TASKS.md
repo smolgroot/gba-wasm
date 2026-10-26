@@ -17,12 +17,11 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 ## Current capabilities
 
 - `DONE` Rust/WASM build and browser integration.
-- `DONE` GBA-sized EWRAM, IWRAM, VRAM, palette, and OAM storage with initial address decoding.
-- `DONE` Mode 3 RGB555-to-RGBA framebuffer rendering.
-- `DONE` A narrow ARM/Thumb instruction subset, cartridge-byte loading, HLE entry state, and browser demos.
-- `DONE` Focused tests for instruction behavior, VRAM access, Mode 3 pixels, and a small ROM-to-frame path.
+- `DONE` GBA-sized RAM/video storage, cartridge validation and windows, a generated ARM Mode 3 fixture, and a stateful browser frame loop.
+- `IN PROGRESS` Display status timing, family-level CPU cycle estimates, and timer/keypad/interrupt register behavior.
+- `DONE` A documented partial ARM/Thumb instruction set and HLE-only entry path; this is not a real BIOS implementation.
 
-Current CPU support is limited to ARM `B`/`BL`, `BX`, immediate `MOV`, and the Thumb instructions documented in [the CPU reference](doc/rust-core/thumb-cpu.md). BIOS execution, most CPU instructions, hardware I/O, timing, interrupts, DMA, backup saves, and most graphics features are not implemented.
+Full ARM7TDMI coverage, BIOS execution, interrupt exception delivery, most I/O registers, DMA, backup saves, audio, and most graphics features are not implemented.
 
 ## Completed stories
 

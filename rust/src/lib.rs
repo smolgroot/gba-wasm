@@ -4,11 +4,12 @@ mod gpu;
 mod memory;
 
 pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
-pub use cpu::{CpuError, ExecutionState, ROM_BASE, ThumbCpu};
+pub use cpu::{CpuError, ExecutionState, MAX_FRAME_INSTRUCTIONS, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::{
-    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, MemoryMap,
-    SCANLINES_PER_FRAME, VCOUNT_ADDR, VISIBLE_SCANLINES,
+    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, IE_ADDR, IF_ADDR, IME_ADDR,
+    KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap, SCANLINES_PER_FRAME, TIMER0_ADDR, VCOUNT_ADDR,
+    VISIBLE_SCANLINES, WAITCNT_ADDR,
 };
 
 use std::fmt;
@@ -65,8 +66,44 @@ impl GbaCore {
         self.memory.write_u8(addr, value)
     }
 
+    pub fn set_pressed_keys(&mut self, pressed: u16) {
+        self.memory.set_pressed_keys(pressed);
+    }
+
     pub fn advance_video_cycles(&mut self, cycles: u32) {
         self.memory.advance_video_cycles(cycles);
+    }
+
+    pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), GbaError> {
+        CartridgeHeader::parse(rom)?;
+        self.memory.load_cartridge(rom);
+        self.memory.reset_io_registers();
+        self.memory.reset_video_clock();
+        self.cpu = ThumbCpu::boot_hle();
+        Ok(())
+    }
+
+    pub fn step_frame(&mut self) -> Result<Vec<u8>, GbaError> {
+        if self.memory.cartridge.is_empty() {
+            return Err(CpuError::EmptyCartridge.into());
+        }
+
+        let mut elapsed_cycles = 0u32;
+        for _ in 0..MAX_FRAME_INSTRUCTIONS {
+            elapsed_cycles = elapsed_cycles.saturating_add(
+                self.cpu
+                    .step_with_cycles(&mut self.memory)
+                    .map_err(GbaError::Cpu)?,
+            );
+            if elapsed_cycles >= CYCLES_PER_FRAME {
+                return Ok(self.render_frame());
+            }
+        }
+
+        Err(CpuError::InstructionBudgetExceeded {
+            limit: MAX_FRAME_INSTRUCTIONS,
+        }
+        .into())
     }
 
     pub fn render_frame(&mut self) -> Vec<u8> {
@@ -82,9 +119,7 @@ impl GbaCore {
     }
 
     pub fn run_rom(&mut self, rom: &[u8], steps: u32) -> Result<Vec<u8>, GbaError> {
-        CartridgeHeader::parse(rom)?;
-        self.memory.load_cartridge(rom);
-        self.cpu = ThumbCpu::boot_hle();
+        self.load_rom(rom)?;
         self.cpu.run_steps(&mut self.memory, steps)?;
         Ok(self.render_frame())
     }
@@ -222,6 +257,28 @@ pub fn run_rom(rom: &[u8], steps: u32) -> Result<Vec<u8>, JsValue> {
     let mut core = GbaCore::new();
     core.run_rom(rom, steps)
         .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[wasm_bindgen]
+pub struct WasmEmulator {
+    core: GbaCore,
+}
+
+#[wasm_bindgen]
+impl WasmEmulator {
+    #[wasm_bindgen(constructor)]
+    pub fn new(rom: &[u8]) -> Result<WasmEmulator, JsValue> {
+        let mut core = GbaCore::new();
+        core.load_rom(rom)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(Self { core })
+    }
+
+    pub fn step_frame(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.core
+            .step_frame()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
 }
 
 #[wasm_bindgen]
