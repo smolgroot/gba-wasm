@@ -10,6 +10,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      workbox: {
+        navigateFallbackDenylist: [/^\/gba-wasm\/docs(?:\/|$)/],
+      },
       includeAssets: [
         'favicon.svg',
         'logo.png',
