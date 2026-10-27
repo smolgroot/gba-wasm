@@ -21,7 +21,7 @@ pub const WAITCNT_ADDR: u32 = IO_BASE + 0x204;
 pub const IME_ADDR: u32 = IO_BASE + 0x208;
 
 const DISPSTAT_IRQ_ENABLE_MASK: u8 = 0b0011_1000;
-const DISPCNT_WRITABLE_MASK: u16 = 0xFFF7;
+const DISPCNT_LOW_WRITABLE_MASK: u8 = 0xF7;
 const DISPSTAT_VBLANK: u8 = 1 << 0;
 const DISPSTAT_HBLANK: u8 = 1 << 1;
 const DISPSTAT_VCOUNT_MATCH: u8 = 1 << 2;
@@ -260,8 +260,8 @@ impl MemoryMap {
 
         let keyinput = !self.pressed_keys & KEYINPUT_MASK;
         match offset {
-            0x000 => return self.io[offset],
-            0x001 => return self.io[offset] & (DISPCNT_WRITABLE_MASK >> 8) as u8,
+            0x000 => return self.io[offset] & DISPCNT_LOW_WRITABLE_MASK,
+            0x001 => return self.io[offset],
             0x130 => return keyinput as u8,
             0x131 => return (keyinput >> 8) as u8,
             0x132 => return self.io[offset] & 0xFF,
@@ -327,8 +327,8 @@ impl MemoryMap {
 
         let key_condition_was_matched = self.key_condition_matches(self.pressed_keys);
         match offset {
-            0x000 => self.io[offset] = value,
-            0x001 => self.io[offset] = value & (DISPCNT_WRITABLE_MASK >> 8) as u8,
+            0x000 => self.io[offset] = value & DISPCNT_LOW_WRITABLE_MASK,
+            0x001 => self.io[offset] = value,
             0x004 => {
                 self.io[offset] = (self.io[offset] & !DISPSTAT_IRQ_ENABLE_MASK)
                     | (value & DISPSTAT_IRQ_ENABLE_MASK);
@@ -477,5 +477,73 @@ mod tests {
         assert_eq!(memory.read_u16(DISPCNT_ADDR), 0x0403);
         assert_eq!(memory.read_u8(0x0400_03FF), 0);
         assert_eq!(memory.read_u8(0x0400_0400), 0);
+    }
+
+    #[test]
+    fn unaligned_halfword_and_word_accesses_align_down() {
+        let mut memory = MemoryMap::new();
+        memory.write_u16(0x0200_0001, 0xABCD);
+        assert_eq!(memory.read_u16(0x0200_0000), 0xABCD);
+        assert_eq!(memory.read_u16(0x0200_0001), 0xABCD);
+
+        memory.write_u32(0x0300_0003, 0x1234_5678);
+        assert_eq!(memory.read_u32(0x0300_0000), 0x1234_5678);
+        assert_eq!(memory.read_u32(0x0300_0003), 0x1234_5678);
+    }
+
+    #[test]
+    fn work_ram_palette_and_oam_mirrors_stay_inside_their_regions() {
+        let mut memory = MemoryMap::new();
+        memory.write_u8(0x0200_0007, 0x11);
+        memory.write_u8(0x0300_0007, 0x22);
+        memory.write_u8(0x0500_0007, 0x33);
+        memory.write_u8(0x0700_0007, 0x44);
+
+        assert_eq!(memory.read_u8(0x0204_0007), 0x11);
+        assert_eq!(memory.read_u8(0x0300_8007), 0x22);
+        assert_eq!(memory.read_u8(0x0500_0407), 0x33);
+        assert_eq!(memory.read_u8(0x0700_0407), 0x44);
+        assert_eq!(memory.read_u8(0x0200_0008), 0);
+        assert_eq!(memory.read_u8(0x0300_0008), 0);
+        assert_eq!(memory.read_u8(0x0400_0007), 0);
+    }
+
+    #[test]
+    fn display_control_masks_reserved_bit_and_unimplemented_io_is_inert() {
+        let mut memory = MemoryMap::new();
+        memory.write_u16(DISPCNT_ADDR, 0xFFFF);
+        memory.write_u8(IO_BASE + 0x010, 0xA5);
+
+        assert_eq!(memory.read_u16(DISPCNT_ADDR), 0xFFF7);
+        assert_eq!(memory.read_u8(IO_BASE + 0x010), 0);
+    }
+
+    #[test]
+    fn interrupt_flags_are_write_one_to_clear_and_timer_overflow_sets_request() {
+        let mut memory = MemoryMap::new();
+        memory.write_u16(IF_ADDR, 0x0008);
+        assert_eq!(memory.read_u16(IF_ADDR), 0);
+
+        memory.write_u16(TIMER0_ADDR, 0xFFFE);
+        memory.write_u8(TIMER0_ADDR + 2, 0xC0);
+        memory.advance_video_cycles(2);
+
+        assert_eq!(memory.read_u16(TIMER0_ADDR), 0xFFFE);
+        assert_eq!(memory.read_u16(IF_ADDR), 0x0008);
+    }
+
+    #[test]
+    fn keypad_interrupt_obeys_or_and_key_conditions() {
+        let mut memory = MemoryMap::new();
+        memory.write_u16(KEYCNT_ADDR, (1 << 14) | 0b11);
+        memory.set_pressed_keys(0b01);
+        assert_eq!(memory.read_u16(IF_ADDR), 1 << 12);
+
+        memory.write_u16(IF_ADDR, 1 << 12);
+        memory.write_u16(KEYCNT_ADDR, (1 << 15) | (1 << 14) | 0b11);
+        memory.set_pressed_keys(0b01);
+        assert_eq!(memory.read_u16(IF_ADDR), 0);
+        memory.set_pressed_keys(0b11);
+        assert_eq!(memory.read_u16(IF_ADDR), 1 << 12);
     }
 }

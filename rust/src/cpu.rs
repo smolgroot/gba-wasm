@@ -1,4 +1,4 @@
-use crate::memory::MemoryMap;
+use crate::memory::{IE_ADDR, IF_ADDR, IME_ADDR, MemoryMap};
 use std::fmt;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
@@ -97,6 +97,7 @@ pub struct ThumbCpu {
     svc_bank: [u32; 2],
     abort_bank: [u32; 2],
     undefined_bank: [u32; 2],
+    waiting_for_irq: Option<u16>,
 }
 
 impl ThumbCpu {
@@ -112,6 +113,7 @@ impl ThumbCpu {
             svc_bank: [0; 2],
             abort_bank: [0; 2],
             undefined_bank: [0; 2],
+            waiting_for_irq: None,
         }
     }
 
@@ -130,6 +132,7 @@ impl ThumbCpu {
             svc_bank: [0; 2],
             abort_bank: [0; 2],
             undefined_bank: [0; 2],
+            waiting_for_irq: None,
         }
     }
 
@@ -153,6 +156,16 @@ impl ThumbCpu {
     }
 
     pub fn step_with_cycles(&mut self, memory: &mut MemoryMap) -> Result<u32, CpuError> {
+        if let Some(mask) = self.waiting_for_irq {
+            let pending = memory.read_u16(IF_ADDR) & memory.read_u16(IE_ADDR) & mask;
+            if memory.read_u8(IME_ADDR) & 1 == 0 || pending == 0 {
+                memory.advance_video_cycles(1);
+                return Ok(1);
+            }
+            memory.write_u16(IF_ADDR, pending);
+            self.waiting_for_irq = None;
+        }
+
         let cycles = self.instruction_cycles(memory);
         let faulting_pc = self.registers[15];
         let result = if self.is_thumb() {
@@ -896,6 +909,17 @@ impl ThumbCpu {
             return Ok(());
         }
 
+        if opcode & 0xF000 == 0xA000 {
+            let destination = usize::from((opcode >> 8) & 0x7);
+            let base = if opcode & 0x0800 != 0 {
+                self.registers[13]
+            } else {
+                self.read_register(15, ExecutionState::Thumb, address) & !3
+            };
+            self.registers[destination] = base.wrapping_add(u32::from(opcode & 0x00FF) * 4);
+            return Ok(());
+        }
+
         if opcode & 0xF000 == 0x9000 {
             let load = opcode & 0x0800 != 0;
             let destination = usize::from((opcode >> 8) & 0x7);
@@ -1362,7 +1386,7 @@ impl ThumbCpu {
     }
 
     fn execute_bios_call(
-        &self,
+        &mut self,
         memory: &mut MemoryMap,
         address: u32,
         state: ExecutionState,
@@ -1371,6 +1395,31 @@ impl ThumbCpu {
         match service {
             0x01 if self.registers[0] & !0xFF == 0 => {
                 self.register_ram_reset(memory, self.registers[0]);
+                Ok(())
+            }
+            0x04 | 0x05 => {
+                let (discard_pending, mask) = if service == 0x05 {
+                    (true, 1)
+                } else {
+                    (self.registers[0] != 0, self.registers[1] as u16 & 0x3FFF)
+                };
+                if mask == 0 {
+                    self.waiting_for_irq = None;
+                    return Ok(());
+                }
+
+                memory.write_u8(IME_ADDR, 1);
+                if discard_pending {
+                    memory.write_u16(IF_ADDR, mask);
+                } else {
+                    let pending = memory.read_u16(IF_ADDR) & memory.read_u16(IE_ADDR) & mask;
+                    if pending != 0 {
+                        memory.write_u16(IF_ADDR, pending);
+                        self.waiting_for_irq = None;
+                        return Ok(());
+                    }
+                }
+                self.waiting_for_irq = Some(mask);
                 Ok(())
             }
             0x0B => {
@@ -1772,6 +1821,20 @@ mod tests {
     }
 
     #[test]
+    fn thumb_add_pc_or_sp_to_register_uses_word_aligned_pc_and_scaled_offset() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x46C0, 0xA203, 0xAA02])); // NOP; ADD r2, PC, #12; ADD r2, SP, #8
+        let mut cpu = ThumbCpu::new(ROM_BASE + 2);
+        cpu.registers[13] = 0x0300_0100;
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[2], ROM_BASE + 4 + 12);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[2], 0x0300_0108);
+    }
+
+    #[test]
     fn thumb_sp_relative_word_store_and_load_use_scaled_offset() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0x9301, 0x9B01])); // STR r3, [sp, #4]; LDR r3, [sp, #4]
@@ -1934,6 +1997,43 @@ mod tests {
         for word in 0..8 {
             assert_eq!(memory.read_u32(0x0200_0100 + word * 4), 0x1000_0000 + word);
         }
+    }
+
+    #[test]
+    fn thumb_vblank_intrwait_resumes_after_enabled_vblank_request() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF05, 0x2001])); // VBlankIntrWait; MOV r0, #1
+        memory.write_u8(crate::memory::DISPSTAT_ADDR, 1 << 3);
+        memory.write_u16(IE_ADDR, 1);
+        memory.advance_video_cycles(
+            crate::memory::VISIBLE_SCANLINES * crate::memory::CYCLES_PER_SCANLINE - 3,
+        );
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u16(IF_ADDR), 1);
+        assert_eq!(cpu.registers[15], ROM_BASE + 2);
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 1);
+        assert_eq!(memory.read_u16(IF_ADDR), 0);
+    }
+
+    #[test]
+    fn thumb_intrwait_returns_and_clears_an_already_pending_enabled_irq() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF04, 0x2002])); // IntrWait; MOV r0, #2
+        memory.write_u16(IE_ADDR, 1 << 3);
+        memory.io[0x202] = 1 << 3;
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0;
+        cpu.registers[1] = 1 << 3;
+
+        cpu.step(&mut memory).unwrap();
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 2);
+        assert_eq!(memory.read_u16(IF_ADDR), 0);
     }
 
     #[test]

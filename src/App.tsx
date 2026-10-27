@@ -5,7 +5,7 @@ import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator }
-const DOCS_URL = '/gba-wasm/'
+const DOCS_URL = '/gba-wasm/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
@@ -44,6 +44,13 @@ function fileToImage(pixels: Uint8ClampedArray) {
   return canvas.toDataURL('image/png')
 }
 
+function hasVisibleVideo(pixels: Uint8ClampedArray) {
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (pixels[index] !== 0 || pixels[index + 1] !== 0 || pixels[index + 2] !== 0) return true
+  }
+  return false
+}
+
 function describeError(error: unknown) {
   if (error instanceof Error) return { message: error.message, stack: error.stack }
   if (typeof error === 'string') return { message: error, stack: undefined }
@@ -68,7 +75,7 @@ function GithubMark() {
 
 function GameBoxArt({ name, fallback, alt, className }: { name: string; fallback: string; alt: string; className?: string }) {
   const [showFallback, setShowFallback] = useState(false)
-  return <img className={className} src={showFallback ? fallback : gbaBoxArtUrl(name)} alt={alt} onError={() => setShowFallback(true)} />
+  return <img className={className} src={showFallback ? fallback || `${import.meta.env.BASE_URL}logo.png` : gbaBoxArtUrl(name)} alt={alt} onError={() => setShowFallback(true)} />
 }
 
 function CartridgeMockup({ name }: { name: string }) {
@@ -137,7 +144,7 @@ function App() {
     }
     emulatorRef.current?.free()
     emulatorRef.current = emulator
-    const status = `${info}: running`
+    const status = `${info}: ${hasVisibleVideo(pixels) ? 'running' : 'no video output yet'}`
     setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator })
     setAppStatus(status)
     return pixels
@@ -161,7 +168,7 @@ function App() {
         id: crypto.randomUUID(),
         name,
         playedAt: Date.now(),
-        screenshot: fileToImage(pixels),
+        screenshot: hasVisibleVideo(pixels) ? fileToImage(pixels) : '',
         rom: rom.buffer.slice(rom.byteOffset, rom.byteOffset + rom.byteLength) as ArrayBuffer,
       }
       await saveGame(game)
@@ -286,6 +293,10 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
 
 function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const blankFrameCountRef = useRef(0)
+  const [hasVideo, setHasVideo] = useState(() => Boolean(game && hasVisibleVideo(game.pixels)))
+  const [noVideoOutput, setNoVideoOutput] = useState(false)
+  const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showStartupSplash, setShowStartupSplash] = useState(() => !settings.skipStartupSplash)
   const splashVisible = showStartupSplash && !settings.skipStartupSplash
@@ -310,10 +321,23 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         try {
           const pixels = game.emulator.step_frame()
           context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
+          if (hasVisibleVideo(pixels)) {
+            blankFrameCountRef.current = 0
+            setHasVideo(true)
+            setNoVideoOutput(false)
+          } else {
+            blankFrameCountRef.current += 1
+            if (blankFrameCountRef.current >= 120) {
+              setHasVideo(false)
+              setNoVideoOutput(true)
+            }
+          }
           nextFrameAt = timestamp + GBA_FRAME_DURATION_MS
         } catch (error) {
           running = false
-          onRuntimeError(error instanceof Error ? error.message : String(error))
+          const message = error instanceof Error ? error.message : String(error)
+          setRuntimeError(message)
+          onRuntimeError(message)
           return
         }
       }
@@ -341,9 +365,11 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       <div className="emulator-heading"><div><p className="eyebrow">NOW PLAYING</p><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
         <div className="play-surface">
-          <div className="play-surface-top"><span><i /> EMULATOR ONLINE</span><span>240 × 160</span></div>
+          <div className="play-surface-top"><span><i /> WASM CORE</span><span>240 × 160</span></div>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
             {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><strong>GBA<span>-</span>WASM</strong><small>Tap to skip</small></button>}
+            {!splashVisible && runtimeError && <div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
+            {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
           <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
         </div>
@@ -374,7 +400,7 @@ function SavedGamesPage({ games, onResume, onRemove }: { games: SavedGame[]; onR
         <div className="saved-list">{games.map((game) => (
           <article className="saved-row" key={game.id}>
             <button className="saved-art" onClick={() => onResume(game)} aria-label={`Play ${game.name}`}>
-              <img src={game.screenshot} alt={`${game.name} screenshot`} /><span><Gamepad2 size={15} /> PLAY</span>
+            <img src={game.screenshot || `${import.meta.env.BASE_URL}logo.png`} alt={game.screenshot ? `${game.name} screenshot` : `Preview unavailable for ${game.name}`} /><span><Gamepad2 size={15} /> PLAY</span>
             </button>
             <div className="saved-info"><h2>{game.name}</h2><p>Last played {formatSavedDate(game.playedAt)}</p></div>
             <div className="saved-date"><span>LAST PLAYED</span><time dateTime={new Date(game.playedAt).toISOString()}>{formatSavedDate(game.playedAt)}</time></div>

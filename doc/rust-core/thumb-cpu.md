@@ -40,6 +40,7 @@ Thumb:
 - immediate `LSL`, `LSR`, and `ASR`
 - two-halfword `BL` long branches
 - ARM and Thumb `SWI 1` (`RegisterRamReset`) for modeled memory regions only
+- ARM and Thumb `SWI 4` (`IntrWait`) and `SWI 5` (`VBlankIntrWait`) using the modeled `IE`/`IF`/`IME` state and cycle-driven LCD requests; CPU IRQ vector entry and BIOS interrupt-handler dispatch are still not implemented
 - ARM and Thumb `SWI 0x0B` (`CpuSet`) for halfword/word copies and fixed-source fills
 - ARM and Thumb `SWI 0x0C` (`CpuFastSet`) for 32-byte-block word copies and fixed-source fills
 - conditional branches for conditions EQ through LE

@@ -24,4 +24,4 @@ Each cartridge ROM window (`0x08000000`, `0x0A000000`, and `0x0C000000`) maps th
 
 ## Validation
 
-Rust tests cover EWRAM access, direct VRAM byte access, the mirrored VRAM aperture, ROM window mapping, and reads beyond a loaded image.
+Rust tests cover aligned and unaligned halfword/word access, EWRAM/IWRAM/palette/OAM mirrors, I/O window boundaries and inert unimplemented registers, `DISPCNT` reserved-bit behavior, timer overflow IRQ requests, keypad OR/AND conditions, direct VRAM access and its mirrored aperture, ROM read-only mapping across windows, and reads beyond a loaded image.

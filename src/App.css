@@ -124,6 +124,9 @@ main { width: 100%; flex: 1; }
 .play-surface-bottom span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screen-well { position: relative; min-height: 480px; display: grid; place-items: center; padding: 35px; background: radial-gradient(ellipse at center, #2a3023, #11130f 73%); }
 .screen-well canvas { display: block; width: min(100%, 720px); height: auto; aspect-ratio: 3 / 2; object-fit: contain; image-rendering: pixelated; background: #090b08; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
+.emulation-notice { position: absolute; inset: 35px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; padding: 28px; background: #11130fe8; color: #f1eee8; text-align: center; }
+.emulation-notice strong { color: #e1c8fa; font: 14px var(--pixel); }
+.emulation-notice span { max-width: 460px; color: #c0c3b9; font: 12px/1.7 var(--mono); overflow-wrap: anywhere; }
 .startup-splash { position: absolute; inset: 35px; display: grid; place-items: center; align-content: center; gap: 16px; border: 0; background: radial-gradient(ellipse at center, #49375d, #211d29 73%); color: #e8d7fa; cursor: pointer; box-shadow: 0 0 0 7px #10120e, 0 0 45px #0009; }
 .startup-splash img { width: clamp(62px, 11vw, 104px); height: auto; image-rendering: pixelated; filter: drop-shadow(0 4px 0 #17111f); }
 .startup-splash strong { font: 14px/1 var(--pixel); letter-spacing: .03em; }
