@@ -24,7 +24,17 @@ The separate `run_thumb_rom` demo starts at `0x08000000` in Thumb System mode wi
 1. Run a pending DMA transfer (the CPU is stalled; see [Memory Map](./memory-map.md)).
 2. If halted, skip directly to the next display or timer event that can raise `IF`, or wake when `IE & IF != 0`.
 3. Take an IRQ exception when `IME` is set, `IE & IF != 0`, and CPSR.I is clear: enter IRQ mode with `LR_irq = next instruction + 4`, save CPSR to `SPSR_irq`, set CPSR.I, and branch to `0x18`.
-4. Execute one ARM or Thumb instruction.
+4. At the head of a confirmed idle loop, skip to the next event (see below).
+5. Execute one ARM or Thumb instruction.
+
+### Idle-loop skipping
+
+Games often wait for VBlank by polling a RAM flag that their IRQ handler sets, which costs tens of thousands of instructions per frame. A short backward branch (at most 32 bytes) marks a candidate loop. The loop is confirmed idle when all three hold:
+- Every instruction since the last arrival at its head only changed registers and flags: ALU operations, loads, and branches without link. Stores, block transfers, PC writes other than branches, PSR transfers, SWIs, and calls cancel it.
+- No register that changes every cycle (timer counters, `SOUNDCNT_X`) was read.
+- Two consecutive arrivals see identical registers and CPSR.
+
+Such a loop cannot exit until something outside the CPU changes, so time advances directly to the next display or timer event. One real iteration then runs before the next skip, so changes to polled registers such as `VCOUNT` are always seen. DMA transfers and IRQ entry cancel the detection. A loop exits within one iteration of the event, as it would without skipping. This made Super Mario Advance 4 about 2.2 times faster.
 
 The generated BIOS image at `0x00000000` contains only the exception vectors and the hardware IRQ dispatcher (save `r0-r3, r12, lr`, call the handler pointer at `0x03007FFC`, restore, `SUBS pc, lr, #4`), so game IRQ handlers run as on hardware. Other vectors are idle loops.
 
@@ -54,6 +64,8 @@ Encodings that are undefined on ARMv4T (the NV condition, coprocessor instructio
 | `0x05` | VBlankIntrWait | `IntrWait` with `r0 = 1, r1 = 1`. |
 | `0x06`, `0x07` | Div, DivArm | `r0` quotient, `r1` remainder, `r3` absolute quotient. Division by zero, which hangs real hardware, is reported as an unsupported call. |
 | `0x08` | Sqrt | Integer square root. |
+| `0x09` | ArcTan | The BIOS polynomial; r1 and r3 receive its intermediate values. |
+| `0x0A` | ArcTan2 | Full-turn angle (0x0000-0xFFFF) of (r0, r1), using the BIOS quadrant rules. |
 | `0x0B` | CpuSet | Halfword/word copy or fixed-source fill. |
 | `0x0C` | CpuFastSet | Word count rounded up to whole 8-word blocks. |
 | `0x0E` | BgAffineSet | Matrix plus reference point from the texture and screen centers. |

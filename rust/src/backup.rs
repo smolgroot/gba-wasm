@@ -1,8 +1,7 @@
 //! Cartridge backup memory (save data) mapped at `0x0E000000`.
 //!
 //! The type is detected from the library ID string the Nintendo SDK embeds in the ROM.
-//! SRAM and Flash (64 KiB and 128 KiB) are modeled; EEPROM is not, and such cartridges
-//! run without backup memory.
+//! SRAM, Flash (64 KiB and 128 KiB), and EEPROM (512 bytes and 8 KiB) are modeled.
 
 use std::fmt;
 
@@ -13,6 +12,9 @@ const ERASED: u8 = 0xFF;
 /// Manufacturer and device IDs reported in Flash ID mode (Panasonic and Sanyo chips).
 const FLASH_64K_ID: [u8; 2] = [0x32, 0x1B];
 const FLASH_128K_ID: [u8; 2] = [0x62, 0x13];
+const EEPROM_BLOCK_SIZE: usize = 8;
+/// Bits returned for a read request: 4 ignored bits, then the 64-bit block.
+const EEPROM_READ_BITS: u32 = 68;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackupKind {
@@ -40,7 +42,8 @@ impl BackupKind {
         }
     }
 
-    /// Size of the emulated backup memory; 0 when it is absent or not modeled.
+    /// Size of the emulated backup memory. EEPROM size is unknown (0) until the game's first
+    /// DMA request reveals its address width.
     pub fn size(self) -> usize {
         match self {
             Self::None | Self::Eeprom => 0,
@@ -53,7 +56,7 @@ impl BackupKind {
     pub fn name(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::Eeprom => "EEPROM (not emulated)",
+            Self::Eeprom => "EEPROM",
             Self::Sram => "SRAM",
             Self::Flash64K => "FLASH512",
             Self::Flash128K => "FLASH1M",
@@ -85,6 +88,44 @@ enum FlashCommand {
     SelectBank,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum EepromPhase {
+    #[default]
+    Command,
+    Address {
+        write: bool,
+    },
+    Data,
+    Stop {
+        write: bool,
+    },
+}
+
+/// Serial EEPROM: the game streams one bit per halfword (bit 0) through DMA3.
+/// Requests are `11` + address + stop bit (read) or `10` + address + 64 bits + stop (write).
+#[derive(Debug, Clone, Default)]
+struct EepromState {
+    address_bits: Option<u32>,
+    phase: EepromPhase,
+    shift: u64,
+    count: u32,
+    address: usize,
+    data: u64,
+    /// Progress through the 68 bits of a pending read; `None` when idle (reads return 1).
+    read_position: Option<u32>,
+    read_block: u64,
+}
+
+impl EepromState {
+    fn read_bit(&self) -> u16 {
+        match self.read_position {
+            Some(position) if position < 4 => 0,
+            Some(position) => ((self.read_block >> (63 - (position - 4))) & 1) as u16,
+            None => 1, // ready
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Backup {
     kind: BackupKind,
@@ -96,6 +137,7 @@ pub struct Backup {
     erase_armed: bool,
     pending: FlashCommand,
     bank: usize,
+    eeprom: EepromState,
 }
 
 impl Backup {
@@ -109,6 +151,7 @@ impl Backup {
             erase_armed: false,
             pending: FlashCommand::None,
             bank: 0,
+            eeprom: EepromState::default(),
         }
     }
 
@@ -120,8 +163,25 @@ impl Backup {
         &self.data
     }
 
-    /// Replaces the contents with previously saved data of the same size.
+    /// Replaces the contents with previously saved data of the same size. EEPROM data of
+    /// 512 bytes or 8 KiB also sets the EEPROM size.
     pub fn load(&mut self, data: &[u8]) -> Result<(), BackupSizeMismatch> {
+        if self.kind == BackupKind::Eeprom && self.data.is_empty() {
+            let address_bits = match data.len() {
+                512 => 6,
+                8192 => 14,
+                actual => {
+                    return Err(BackupSizeMismatch {
+                        expected: 8192,
+                        actual,
+                    });
+                }
+            };
+            self.eeprom.address_bits = Some(address_bits);
+            self.data = data.to_vec();
+            self.dirty = false;
+            return Ok(());
+        }
         if data.len() != self.data.len() {
             return Err(BackupSizeMismatch {
                 expected: self.data.len(),
@@ -136,6 +196,82 @@ impl Backup {
     /// Reports whether the contents changed since the last call.
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Uses the length of a DMA transfer to the EEPROM to set its address width: 9 or 73
+    /// units for 6-bit (512 bytes), 17 or 81 units for 14-bit (8 KiB) addressing.
+    pub fn observe_eeprom_dma_write(&mut self, units: u32) {
+        if self.kind != BackupKind::Eeprom || self.eeprom.address_bits.is_some() {
+            return;
+        }
+        let address_bits = match units {
+            9 | 73 => 6,
+            17 | 81 => 14,
+            _ => return,
+        };
+        self.eeprom.address_bits = Some(address_bits);
+        self.data = vec![ERASED; (1 << address_bits.min(10)) * EEPROM_BLOCK_SIZE];
+    }
+
+    /// Current EEPROM output bit without consuming it (CPU polling reads).
+    pub fn peek_eeprom_bit(&self) -> u16 {
+        self.eeprom.read_bit()
+    }
+
+    /// Next EEPROM output bit for a DMA read.
+    pub fn read_eeprom_bit(&mut self) -> u16 {
+        let bit = self.eeprom.read_bit();
+        if let Some(position) = self.eeprom.read_position {
+            self.eeprom.read_position = (position + 1 < EEPROM_READ_BITS).then_some(position + 1);
+        }
+        bit
+    }
+
+    pub fn write_eeprom_bit(&mut self, value: u16) {
+        // Without a size, requests cannot be decoded; games always start with a DMA request.
+        let Some(address_bits) = self.eeprom.address_bits else {
+            return;
+        };
+        let state = &mut self.eeprom;
+        state.shift = (state.shift << 1) | u64::from(value & 1);
+        state.count += 1;
+        match state.phase {
+            EepromPhase::Command if state.count == 2 => {
+                state.phase = match state.shift & 3 {
+                    0b11 => EepromPhase::Address { write: false },
+                    0b10 => EepromPhase::Address { write: true },
+                    _ => EepromPhase::Command,
+                };
+            }
+            EepromPhase::Address { write } if state.count == address_bits => {
+                state.address =
+                    (state.shift & 0x3FF) as usize % (self.data.len() / EEPROM_BLOCK_SIZE);
+                state.phase = if write {
+                    EepromPhase::Data
+                } else {
+                    EepromPhase::Stop { write: false }
+                };
+            }
+            EepromPhase::Data if state.count == 64 => {
+                state.data = state.shift;
+                state.phase = EepromPhase::Stop { write: true };
+            }
+            EepromPhase::Stop { write } => {
+                let start = state.address * EEPROM_BLOCK_SIZE;
+                let block = &mut self.data[start..start + EEPROM_BLOCK_SIZE];
+                if write {
+                    block.copy_from_slice(&state.data.to_be_bytes());
+                    self.dirty = true;
+                } else {
+                    state.read_block = u64::from_be_bytes(block.try_into().unwrap());
+                    state.read_position = Some(0);
+                }
+                state.phase = EepromPhase::Command;
+            }
+            _ => return,
+        }
+        state.shift = 0;
+        state.count = 0;
     }
 
     /// Reads one byte; `offset` is the address within the 64 KiB backup window.
@@ -345,6 +481,63 @@ mod tests {
         command(&mut backup, 0xB0);
         backup.write(0, 0);
         assert_eq!(backup.read(0x10), ERASED);
+    }
+
+    fn send_bits(backup: &mut Backup, value: u64, bits: u32) {
+        for bit in (0..bits).rev() {
+            backup.write_eeprom_bit(((value >> bit) & 1) as u16);
+        }
+    }
+
+    #[test]
+    fn eeprom_size_comes_from_the_first_request_length() {
+        let mut small = Backup::new(BackupKind::Eeprom);
+        assert!(small.data().is_empty());
+        small.observe_eeprom_dma_write(9);
+        assert_eq!(small.data().len(), 512);
+
+        let mut large = Backup::new(BackupKind::Eeprom);
+        large.observe_eeprom_dma_write(81);
+        large.observe_eeprom_dma_write(9);
+        assert_eq!(large.data().len(), 8192, "the first request decides");
+    }
+
+    #[test]
+    fn eeprom_writes_and_reads_back_64_bit_blocks_msb_first() {
+        let mut backup = Backup::new(BackupKind::Eeprom);
+        backup.observe_eeprom_dma_write(81);
+        let block = 0x0123_4567_89AB_CDEF;
+
+        // Write request: 10, 14-bit address 5, 64 data bits, stop bit.
+        send_bits(&mut backup, 0b10, 2);
+        send_bits(&mut backup, 5, 14);
+        send_bits(&mut backup, block, 64);
+        send_bits(&mut backup, 0, 1);
+        assert!(backup.take_dirty());
+        assert_eq!(&backup.data()[40..48], &block.to_be_bytes());
+        assert_eq!(backup.peek_eeprom_bit(), 1, "ready after the write");
+
+        // Read request: 11, address 5, stop bit; then 4 ignored bits and the block.
+        send_bits(&mut backup, 0b11, 2);
+        send_bits(&mut backup, 5, 14);
+        send_bits(&mut backup, 0, 1);
+        let bits: Vec<u16> = (0..68).map(|_| backup.read_eeprom_bit()).collect();
+        assert_eq!(&bits[..4], &[0, 0, 0, 0]);
+        let value = bits[4..]
+            .iter()
+            .fold(0u64, |acc, bit| (acc << 1) | u64::from(*bit));
+        assert_eq!(value, block);
+        assert_eq!(backup.read_eeprom_bit(), 1, "idle again");
+    }
+
+    #[test]
+    fn eeprom_accepts_saved_data_of_either_size_before_the_game_runs() {
+        let mut backup = Backup::new(BackupKind::Eeprom);
+        assert!(backup.load(&[0; 100]).is_err());
+        backup.load(&vec![0x5A; 512]).unwrap();
+        assert_eq!(backup.data().len(), 512);
+        backup.observe_eeprom_dma_write(81);
+        assert_eq!(backup.data().len(), 512, "loaded data keeps its size");
     }
 
     #[test]

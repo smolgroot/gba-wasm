@@ -42,10 +42,17 @@ const DMA_ENABLE: u16 = 1 << 15;
 const DMA_TIMING_IMMEDIATE: u16 = 0;
 const DMA_TIMING_VBLANK: u16 = 1;
 const DMA_TIMING_HBLANK: u16 = 2;
+const DMA_TIMING_SPECIAL: u16 = 3;
+const SOUND_FIFO_A_ADDR: u32 = IO_BASE + 0x0A0;
+/// Sound FIFO DMA always moves four words to the fixed FIFO address.
+const SOUND_DMA_WORDS: u32 = 4;
 /// Fixed setup cost per transfer; each unit adds a read and a write cycle.
 const DMA_SETUP_CYCLES: u32 = 2;
 const KEYINPUT_MASK: u16 = 0x03FF;
 const BACKUP_START: u32 = 0x0E00_0000;
+const EEPROM_START: u32 = 0x0D00_0000;
+const EEPROM_START_LARGE_ROM: u32 = 0x0DFF_FF00;
+const LARGE_ROM_SIZE: usize = 16 * 1024 * 1024;
 const BACKUP_WINDOW_MASK: u32 = 0xFFFF;
 const DISPLAY_MODE_MASK: u8 = 0x07;
 const TILE_MODE_BG_VRAM_END: usize = 0x1_0000;
@@ -172,6 +179,19 @@ fn stored_io_read_mask(offset: usize) -> u8 {
         0x052..=0x053 => 0x1F, // BLDALPHA
         0x0BA..=0x0BB | 0x0C6..=0x0C7 | 0x0D2..=0x0D3 | 0x0DE..=0x0DF => 0xFF, // DMAxCNT_H
         0x300 => 0x01,         // POSTFLG
+        // Sound: lengths and frequencies are write-only; restart bits read back as zero.
+        0x060 => 0x7F,
+        0x062 | 0x068 => 0xC0,
+        0x063 | 0x069 | 0x079 | 0x081 => 0xFF,
+        0x065 | 0x06D | 0x075 | 0x07D => 0x40,
+        0x070 => 0xE0,
+        0x073 => 0xE0,
+        0x07C => 0xFF,
+        0x080 => 0x77,
+        0x082 => 0x0F,
+        0x083 => 0x77,
+        0x088 => 0xFE,
+        0x089 => 0xC3,
         _ => 0,
     }
 }
@@ -197,12 +217,14 @@ fn periodic_event_count(start: u32, elapsed: u64, event: u32, period: u32) -> u6
     }
 }
 
+use crate::apu::Apu;
 use crate::backup::{Backup, BackupKind};
 
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
     pub bios: Vec<u8>,
     pub backup: Backup,
+    pub apu: Apu,
     pub ewram: Vec<u8>,
     pub iwram: Vec<u8>,
     pub vram: Vec<u8>,
@@ -216,6 +238,9 @@ pub struct MemoryMap {
     timers: [Timer; 4],
     dma: [DmaChannel; 4],
     affine_reference_writes: [bool; 2],
+    /// Set by reads of registers that change on every cycle (timer counters, sound status),
+    /// which make a polling loop's outcome depend on time between events.
+    volatile_read: std::cell::Cell<bool>,
 }
 
 impl MemoryMap {
@@ -223,6 +248,7 @@ impl MemoryMap {
         let mut memory = Self {
             bios: crate::bios::hle_image(),
             backup: Backup::new(BackupKind::None),
+            apu: Apu::new(),
             ewram: vec![0; EWRAM_SIZE],
             iwram: vec![0; IWRAM_SIZE],
             vram: vec![0; VRAM_SIZE],
@@ -236,6 +262,7 @@ impl MemoryMap {
             timers: [Timer::default(); 4],
             dma: [DmaChannel::default(); 4],
             affine_reference_writes: [false; 2],
+            volatile_read: std::cell::Cell::new(false),
         };
         memory.reset_io_registers();
         memory
@@ -250,7 +277,16 @@ impl MemoryMap {
     }
 
     pub fn advance_video_cycles(&mut self, cycles: u32) {
-        self.advance_timers(u64::from(cycles));
+        let overflows = self.advance_timers(u64::from(cycles));
+        for (timer, count) in overflows.into_iter().enumerate() {
+            let refill = self.apu.timer_overflowed(&self.io, timer, count);
+            for (fifo, needed) in refill.into_iter().enumerate() {
+                if needed {
+                    self.request_sound_dma(fifo);
+                }
+            }
+        }
+        self.apu.advance(&mut self.io, cycles);
         self.advance_display_interrupts(self.video_cycles, u64::from(cycles));
         let vblanks = periodic_event_count(
             self.video_cycles,
@@ -321,6 +357,10 @@ impl MemoryMap {
                 *byte = 0;
             }
         }
+        if sound {
+            self.apu = Apu::new();
+            self.io[0x089] = 0x02; // SOUNDBIAS level 0x200
+        }
         if other {
             for offset in [0x020, 0x026, 0x030, 0x036] {
                 self.io[offset + 1] = 0x01;
@@ -329,6 +369,17 @@ impl MemoryMap {
             self.dma = [DmaChannel::default(); 4];
             self.affine_reference_writes = [true; 2];
         }
+    }
+
+    /// EEPROM occupies the top ROM window: all of `0x0D000000`-`0x0DFFFFFF` for ROMs up to
+    /// 16 MiB, and only its last 256 bytes for larger ROMs.
+    fn in_eeprom_window(&self, addr: u32) -> bool {
+        let start = if self.cartridge.len() > LARGE_ROM_SIZE {
+            EEPROM_START_LARGE_ROM
+        } else {
+            EEPROM_START
+        };
+        self.backup.kind() == BackupKind::Eeprom && (start..BACKUP_START).contains(&addr)
     }
 
     /// Position of the display in the current frame, in cycles from the start of scanline 0.
@@ -420,9 +471,12 @@ impl MemoryMap {
         }
     }
 
-    fn advance_timers(&mut self, cycles: u64) {
+    /// Advances the timers and returns the overflow counts of timers 0 and 1, which clock
+    /// the sound FIFOs.
+    fn advance_timers(&mut self, cycles: u64) -> [u64; 2] {
         let prescalers = [1u64, 64, 256, 1024];
         let mut prior_overflows = 0;
+        let mut sound_timer_overflows = [0; 2];
         for (index, timer) in self.timers.iter_mut().enumerate() {
             if timer.control & Timer::ENABLE == 0 {
                 prior_overflows = 0;
@@ -438,12 +492,30 @@ impl MemoryMap {
                 accumulated / divisor
             };
             prior_overflows = timer.advance(ticks);
+            if index < 2 {
+                sound_timer_overflows[index] = prior_overflows;
+            }
 
             if prior_overflows > 0 && timer.control & Timer::IRQ_ENABLE != 0 {
                 let pending = self.io[0x202] as u16 | (u16::from(self.io[0x203]) << 8);
                 let pending = pending | (IRQ_TIMER0 << index);
                 self.io[0x202] = pending as u8;
                 self.io[0x203] = (pending >> 8) as u8;
+            }
+        }
+        sound_timer_overflows
+    }
+
+    /// Starts DMA1 or DMA2 when it is set up for special timing towards this FIFO.
+    fn request_sound_dma(&mut self, fifo: usize) {
+        let address = SOUND_FIFO_A_ADDR + fifo as u32 * 4;
+        for channel in 1..=2 {
+            let control = self.dma_control(channel);
+            if control & DMA_ENABLE != 0
+                && (control >> 12) & 3 == DMA_TIMING_SPECIAL
+                && self.dma[channel].destination == address
+            {
+                self.dma[channel].pending = true;
             }
         }
     }
@@ -502,13 +574,18 @@ impl MemoryMap {
             return 0;
         };
         let control = self.dma_control(channel);
-        let unit: u32 = if control & DMA_WORD != 0 { 4 } else { 2 };
+        let sound_fifo = matches!(channel, 1 | 2) && (control >> 12) & 3 == DMA_TIMING_SPECIAL;
+        let unit: u32 = if control & DMA_WORD != 0 || sound_fifo {
+            4
+        } else {
+            2
+        };
         let step = |address_control: u16| match address_control {
             0 | 3 => unit as i32,
             1 => -(unit as i32),
             _ => 0,
         };
-        let destination_control = (control >> 5) & 3;
+        let destination_control = if sound_fifo { 2 } else { (control >> 5) & 3 };
         let mut source_control = (control >> 7) & 3;
         // GamePak sources always increment.
         if (0x0800_0000..0x0E00_0000).contains(&self.dma[channel].source) {
@@ -523,8 +600,16 @@ impl MemoryMap {
             count,
             ..
         } = self.dma[channel];
+        let count = if sound_fifo { SOUND_DMA_WORDS } else { count };
+        if self.in_eeprom_window(destination) {
+            self.backup.observe_eeprom_dma_write(count);
+        }
+        let reads_eeprom = unit == 2 && self.in_eeprom_window(source);
         for _ in 0..count {
-            if unit == 4 {
+            if reads_eeprom {
+                let value = self.backup.read_eeprom_bit();
+                self.write_u16(destination & !1, value);
+            } else if unit == 4 {
                 let value = self.read_u32(source & !3);
                 self.write_u32(destination & !3, value);
             } else {
@@ -571,7 +656,15 @@ impl MemoryMap {
         }
     }
 
+    /// Reports (and clears) whether a time-dependent register was read since the last call.
+    pub fn take_volatile_read(&self) -> bool {
+        self.volatile_read.replace(false)
+    }
+
     fn read_io(&self, offset: usize) -> u8 {
+        if (0x100..0x110).contains(&offset) || offset == 0x084 {
+            self.volatile_read.set(true);
+        }
         if (0x100..0x110).contains(&offset) {
             return self.timer_io_byte(offset);
         }
@@ -582,6 +675,8 @@ impl MemoryMap {
             0x001 => return self.io[offset],
             0x130 => return keyinput as u8,
             0x131 => return (keyinput >> 8) as u8,
+            0x084 => return (self.io[offset] & 0x80) | self.apu.status(),
+            0x090..=0x09F => return self.apu.wave_ram(&self.io, offset - 0x090),
             0x132 => return self.io[offset] & 0xFF,
             0x133 => return self.io[offset] & 0xC3,
             0x200 => return self.io[offset] & 0xFF,
@@ -661,6 +756,18 @@ impl MemoryMap {
             0x133 => self.io[offset] = value & 0xC3,
             0x0BA..=0x0BB | 0x0C6..=0x0C7 | 0x0D2..=0x0D3 | 0x0DE..=0x0DF => {
                 self.write_dma_control(offset, value)
+            }
+            0x090..=0x09F => self.apu.write_wave_ram(&self.io, offset - 0x090, value),
+            0x0A0..=0x0A7 => self.apu.push_fifo((offset - 0x0A0) / 4, value),
+            0x084 => {
+                self.io[offset] = value & 0x80;
+                self.apu.register_written(&mut self.io, offset);
+            }
+            // PSG registers ignore writes while the sound master enable is off.
+            0x060..=0x081 if self.io[0x084] & 0x80 == 0 => {}
+            0x060..=0x089 => {
+                self.io[offset] = value;
+                self.apu.register_written(&mut self.io, offset);
             }
             0x200 => self.io[offset] = value,
             0x201 => self.io[offset] = value & 0x3F,
@@ -762,6 +869,9 @@ impl MemoryMap {
     }
 
     pub fn read_u16(&self, addr: u32) -> u16 {
+        if self.in_eeprom_window(addr) {
+            return self.backup.peek_eeprom_bit();
+        }
         // Backup memory has an 8-bit bus: wide reads repeat the addressed byte.
         if addr >= BACKUP_START {
             return u16::from(self.read_u8(addr)) * 0x0101;
@@ -782,6 +892,9 @@ impl MemoryMap {
     }
 
     pub fn write_u16(&mut self, addr: u32, value: u16) {
+        if self.in_eeprom_window(addr) {
+            return self.backup.write_eeprom_bit(value);
+        }
         // Backup memory has an 8-bit bus: only the byte lane of the address is stored.
         if addr >= BACKUP_START {
             return self.store_u8(addr, (value >> ((addr & 1) * 8)) as u8);
@@ -1110,6 +1223,46 @@ mod tests {
             "the 64 KiB window mirrors"
         );
         assert_eq!(memory.cartridge, rom, "ROM bytes are never modified");
+    }
+
+    #[test]
+    fn eeprom_is_accessed_through_dma3_in_the_top_rom_window() {
+        let mut rom = vec![0; 0x200];
+        rom.extend_from_slice(b"EEPROM_V122");
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        assert_eq!(
+            memory.read_u16(0x0C00_0200),
+            u16::from_le_bytes(*b"EE"),
+            "the ROM mirror below 0x0D000000 is unchanged"
+        );
+
+        // Write request for 6-bit block 1: 10, 000001, 64 bits of 0xA5.., stop = 73 units.
+        let request: Vec<u16> = [1, 0, 0, 0, 0, 0, 0, 1]
+            .into_iter()
+            .chain((0..64).map(|bit| u16::from(0xA5u8 >> (7 - bit % 8) & 1)))
+            .chain([0])
+            .collect();
+        for (index, bit) in request.iter().enumerate() {
+            memory.write_u16(0x0200_0000 + index as u32 * 2, *bit);
+        }
+        configure_dma(&mut memory, 3, 0x0200_0000, 0x0D00_0000, 73, DMA_ENABLE);
+        memory.run_pending_dma();
+        assert_eq!(&memory.backup.data()[8..16], &[0xA5; 8]);
+
+        // Read request (9 units), then a 68-unit DMA read back into EWRAM.
+        for (index, bit) in [1u16, 1, 0, 0, 0, 0, 0, 1, 0].iter().enumerate() {
+            memory.write_u16(0x0200_0000 + index as u32 * 2, *bit);
+        }
+        configure_dma(&mut memory, 3, 0x0200_0000, 0x0D00_0000, 9, DMA_ENABLE);
+        memory.run_pending_dma();
+        configure_dma(&mut memory, 3, 0x0D00_0000, 0x0300_0000, 68, DMA_ENABLE);
+        memory.run_pending_dma();
+        let bits: Vec<u16> = (0..68)
+            .map(|i| memory.read_u16(0x0300_0000 + i * 2))
+            .collect();
+        assert_eq!(&bits[4..12], &[1, 0, 1, 0, 0, 1, 0, 1]);
+        assert_eq!(memory.read_u16(0x0D00_0000), 1, "ready when idle");
     }
 
     #[test]

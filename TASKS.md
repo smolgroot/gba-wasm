@@ -21,9 +21,10 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 - `DONE` ARMv4T ARM/Thumb interpreter passing the jsmolka/gba-tests ARM, Thumb, and memory suites, with IRQ exception delivery through a generated HLE BIOS image. This is not a real BIOS implementation.
 - `DONE` Display status and VBlank/HBlank/VCount IRQs, timers, keypad interrupts, DMA (immediate/VBlank/HBlank), and VBlank-aligned frame stepping.
 - `DONE` Scanline PPU for all display modes, with objects, windows, and blending.
-- `IN PROGRESS` SRAM/Flash saves persisted in the browser, and keyboard input.
+- `DONE` SRAM, Flash, and EEPROM saves persisted in the browser; pause/resume; keyboard input.
+- `DONE` PSG and DirectSound audio streamed to the browser at 32,768 Hz.
 
-Audio (including sound FIFO DMA), EEPROM saves, touch controls, pause/resume, wait states, and several BIOS services are not implemented.
+Touch controls are in progress. Wait states, the prefetch buffer, serial/link hardware, and several BIOS services are not implemented.
 
 ## Completed stories
 
@@ -173,7 +174,7 @@ Acceptance criteria:
 
 ### ROM-02: Boot the first real homebrew cartridge
 
-**Status:** `IN PROGRESS`  
+**Status:** `DONE`  
 **Priority:** `P0`  
 **Depends on:** ROM-01, CPU-02, BOOT-01, BUS-01, PPU-01, TIME-01
 
@@ -187,13 +188,13 @@ Acceptance criteria:
 - Browser status distinguishes loading, running, paused, and emulation errors.
 - Record the exact supported fixture and known limitations; do not generalize one passing game into broad compatibility.
 
-The `arm.gba`, `thumb.gba`, and `memory.gba` test ROMs (MIT, provenance in `rust/tests/fixtures/gba-tests/README.md`) boot deterministically to their pixel-tested result screen. Remaining: the browser has no paused state (see UI-01).
+The `arm.gba`, `thumb.gba`, and `memory.gba` test ROMs (MIT, provenance in `rust/tests/fixtures/gba-tests/README.md`) boot deterministically to their pixel-tested result screen. The browser run-state indicator distinguishes LOADING, RUNNING, PAUSED, and ERROR.
 
 ## P1: Usable emulator shell
 
 ### UI-01: Add pause, resume, and bounded frame stepping
 
-**Status:** `BACKLOG`  
+**Status:** `DONE`  
 **Priority:** `P1`  
 **Depends on:** TIME-01
 
@@ -203,6 +204,8 @@ Acceptance criteria:
 - Resume continues from the same state.
 - Browser work is scheduled in bounded frame batches and does not block input for long intervals.
 - Tests cover pause/resume state and repeated frame-step requests.
+
+Pause is a button and the `P` key. The frame loop runs at most one frame per animation frame, at 59.73 fps (see [WASM Boundary](doc/architecture/wasm-boundary.md#frame-loop)). Rust tests show a paused-and-resumed run matches an uninterrupted one frame for frame, and that each `step_frame` ends at the next VBlank. A headless Chrome check confirmed the frame stays frozen while paused and resumes afterwards.
 
 ### INPUT-01: Map keyboard and touch controls
 
@@ -221,7 +224,7 @@ Keyboard input is done (`src/keypad.ts`; keys are released on blur and when the 
 
 ### SAVE-01: Support cartridge backup storage
 
-**Status:** `IN PROGRESS`  
+**Status:** `DONE`  
 **Priority:** `P1`  
 **Depends on:** ROM-01, BUS-01
 
@@ -232,7 +235,7 @@ Acceptance criteria:
 - Persist saves locally using a versioned browser storage format and handle quota or corrupt-data errors.
 - Never modify the uploaded ROM bytes.
 
-SRAM and Flash (64/128 KiB) are detected from SDK library strings, emulated with Rust tests, and persisted per ROM hash in versioned IndexedDB records (see [WASM Boundary](doc/architecture/wasm-boundary.md)). A headless Chrome run confirmed a Flash save is stored and restored. Remaining: EEPROM.
+SRAM and Flash (64/128 KiB) are detected from SDK library strings, emulated with Rust tests, and persisted per ROM hash in versioned IndexedDB records (see [WASM Boundary](doc/architecture/wasm-boundary.md)). A headless Chrome run confirmed a Flash save is stored and restored. EEPROM (512 bytes/8 KiB) was added next, with its size inferred from the first DMA request.
 
 ## P2: Compatibility and fidelity
 
@@ -266,7 +269,7 @@ Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatch
 
 ### AUDIO-01: Implement GBA audio output
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P2`  
 **Depends on:** BUS-01, TIME-01
 
@@ -275,6 +278,8 @@ Acceptance criteria:
 - Implement sound register behavior and channel state required by target ROMs.
 - Mix samples at a documented rate and stream through browser audio without blocking emulation.
 - Test deterministic sample generation and audio lifecycle behavior.
+
+All four PSG channels and both DirectSound FIFOs, including sound DMA, are implemented and mixed at 32,768 Hz ([Audio](doc/rust-core/apu.md)). Rust tests cover sample generation. Remaining: automated tests of the browser audio lifecycle (start after a gesture, silence while paused, teardown), which were checked by hand in headless Chrome. The repository has no JS test runner yet.
 
 ### COMPAT-01: Track a reproducible homebrew compatibility set
 

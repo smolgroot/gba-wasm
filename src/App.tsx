@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Settings, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Info, Pause, Play, Settings, Trash2, X } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 import { hashRom, loadBackup, storeBackup } from './backupStorage'
 import { attachKeyboard } from './keypad'
+import { TouchControls } from './TouchControls'
+import { AudioOutput } from './audio'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; romHash: string; backupType: string }
 type SaveFlushRef = { current: (() => void) | null }
@@ -12,28 +14,42 @@ const DOCS_URL = '/gba-wasm/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
+// Display refresh timestamps jitter; a frame due within this margin runs now.
+const FRAME_PACING_TOLERANCE_MS = 2
 const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
-const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT']]
+const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT'], ['P', 'PAUSE']]
 // Games write saves over several frames; persist once writes have stopped for this long.
 const SAVE_QUIET_FRAMES = 30
+// Keep in sync with the touch overlay media query in App.css.
+const TOUCH_LANDSCAPE_QUERY = '(orientation: landscape) and (pointer: coarse) and (max-height: 540px)'
 
 type EmulatorSettings = {
   skipStartupSplash: boolean
+  sound: boolean
+  touchControls: boolean
 }
+
+// Touch controls default to on for phones and tablets, where there is usually no keyboard.
+const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches }
 
 function readSettings(): EmulatorSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_STORAGE_KEY)
-    if (!stored) return { skipStartupSplash: false }
+    if (!stored) return DEFAULT_SETTINGS
     const parsed: unknown = JSON.parse(stored)
-    if (typeof parsed === 'object' && parsed !== null && 'skipStartupSplash' in parsed) {
-      return { skipStartupSplash: Boolean(parsed.skipStartupSplash) }
+    if (typeof parsed === 'object' && parsed !== null) {
+      const values = parsed as Partial<Record<keyof EmulatorSettings, unknown>>
+      return {
+        skipStartupSplash: 'skipStartupSplash' in values ? Boolean(values.skipStartupSplash) : DEFAULT_SETTINGS.skipStartupSplash,
+        sound: 'sound' in values ? Boolean(values.sound) : DEFAULT_SETTINGS.sound,
+        touchControls: 'touchControls' in values ? Boolean(values.touchControls) : DEFAULT_SETTINGS.touchControls,
+      }
     }
   } catch {
     // Use defaults when storage is unavailable or malformed.
   }
-  return { skipStartupSplash: false }
+  return DEFAULT_SETTINGS
 }
 
 function formatSavedDate(timestamp: number) {
@@ -150,7 +166,8 @@ function App() {
     const backupType = emulator.backup_type()
     try {
       romHash = await hashRom(rom)
-      if (emulator.backup_data().length > 0) {
+      // EEPROM size is only known once the game runs, so check the type, not the data.
+      if (backupType !== 'none') {
         try {
           const stored = await loadBackup(romHash, backupType)
           if (stored) {
@@ -318,13 +335,36 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
 
 function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const playSurfaceRef = useRef<HTMLDivElement | null>(null)
+  // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
+  const pausedRef = useRef(false)
+  const audioRef = useRef<AudioOutput | null>(null)
+  const [paused, setPaused] = useState(false)
   const blankFrameCountRef = useRef(0)
   const [hasVideo, setHasVideo] = useState(() => Boolean(game && hasVisibleVideo(game.pixels)))
   const [noVideoOutput, setNoVideoOutput] = useState(false)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
   const [showStartupSplash, setShowStartupSplash] = useState(() => !settings.skipStartupSplash)
   const splashVisible = showStartupSplash && !settings.skipStartupSplash
+
+  function togglePause() {
+    pausedRef.current = !pausedRef.current
+    setPaused(pausedRef.current)
+  }
+
+  useEffect(() => {
+    if (!game) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyP' || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+      pausedRef.current = !pausedRef.current
+      setPaused(pausedRef.current)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [game])
 
   useEffect(() => {
     if (!splashVisible) return
@@ -332,10 +372,57 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     return () => window.clearTimeout(timer)
   }, [splashVisible])
 
+  // Keyboard and touch input are tracked separately and combined, so neither releases the other's buttons.
+  const keyboardKeysRef = useRef(0)
+  const touchKeysRef = useRef(0)
+  const sendKeys = useCallback(() => game?.emulator.set_pressed_keys(keyboardKeysRef.current | touchKeysRef.current), [game])
+  const onTouchKeys = useCallback((pressed: number) => {
+    touchKeysRef.current = pressed
+    sendKeys()
+  }, [sendKeys])
+
+  // In phone landscape the touch overlay fills the viewport, so bring it into view on rotation.
+  useEffect(() => {
+    if (!game || !settings.touchControls) return
+    const landscape = matchMedia(TOUCH_LANDSCAPE_QUERY)
+    const reveal = () => { if (landscape.matches) playSurfaceRef.current?.scrollIntoView({ block: 'start' }) }
+    reveal()
+    landscape.addEventListener('change', reveal)
+    return () => landscape.removeEventListener('change', reveal)
+  }, [game, settings.touchControls])
+
   useEffect(() => {
     if (!game) return
-    return attachKeyboard(window, (pressed) => game.emulator.set_pressed_keys(pressed))
-  }, [game])
+    return attachKeyboard(window, (pressed) => {
+      keyboardKeysRef.current = pressed
+      sendKeys()
+    })
+  }, [game, sendKeys])
+
+  useEffect(() => {
+    if (!game || !settings.sound) return
+    let active = true
+    let output: AudioOutput | null = null
+    void AudioOutput.create(game.emulator.audio_sample_rate()).then((created) => {
+      if (!active) return created.close()
+      output = created
+      audioRef.current = created
+      created.resume()
+    }).catch((error: unknown) => {
+      if (active) onRuntimeError(`Audio unavailable: ${describeError(error).message}`)
+    })
+    // Browsers only start audio after a user gesture.
+    const resume = () => output?.resume()
+    window.addEventListener('keydown', resume)
+    window.addEventListener('pointerdown', resume)
+    return () => {
+      active = false
+      window.removeEventListener('keydown', resume)
+      window.removeEventListener('pointerdown', resume)
+      if (audioRef.current === output) audioRef.current = null
+      output?.close()
+    }
+  }, [game, settings.sound, onRuntimeError])
 
   useEffect(() => {
     if (!game || game.backupType === 'none') return
@@ -386,9 +473,15 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     let nextFrameAt: number | null = null
     const advanceFrame = (timestamp: number) => {
       if (!running) return
-      if (nextFrameAt === null || timestamp >= nextFrameAt) {
+      if (pausedRef.current) {
+        // Resume on the next animation frame instead of catching up on paused time.
+        nextFrameAt = null
+      } else if (nextFrameAt === null || timestamp >= nextFrameAt - FRAME_PACING_TOLERANCE_MS) {
         try {
           const pixels = game.emulator.step_frame()
+          // Always drain the core's buffer, even when sound is off.
+          const samples = game.emulator.take_audio_samples()
+          audioRef.current?.push(samples)
           context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
           if (hasVisibleVideo(pixels)) {
             blankFrameCountRef.current = 0
@@ -401,7 +494,11 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
               setNoVideoOutput(true)
             }
           }
-          nextFrameAt = timestamp + GBA_FRAME_DURATION_MS
+          // Advance the deadline by exactly one GBA frame so the average rate is 59.73 fps;
+          // restarting from `timestamp` would skip every other 60 Hz display refresh.
+          nextFrameAt = (nextFrameAt ?? timestamp) + GBA_FRAME_DURATION_MS
+          // After a stall (background tab, slow device), resynchronize instead of catching up.
+          if (timestamp - nextFrameAt > GBA_FRAME_DURATION_MS * 3) nextFrameAt = timestamp + GBA_FRAME_DURATION_MS
         } catch (error) {
           running = false
           const message = error instanceof Error ? error.message : String(error)
@@ -429,31 +526,42 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     </section>
   )
 
+  // Shown in the side card on desktop and in the Details dialog on mobile, where the card is hidden.
+  const cartridgeDetails = <>
+    <CartridgeMockup key={game.name} name={game.name} />
+    <p>ROM loaded into the WebAssembly runtime.</p>
+    <button className="secondary-button wide-button" onClick={() => { setShowDetails(false); onLoad() }}><ArrowDownToLine size={17} /> Replace ROM</button>
+    <div className="keyboard-note"><span>CONTROLS</span><div>{KEYBOARD_CONTROLS.map(([key, button]) => <span className="control" key={button}><kbd>{key}</kbd><small>{button}</small></span>)}</div></div>
+  </>
+
   return (
     <section className="emulator-page">
-      <div className="emulator-heading"><div><p className="eyebrow">NOW PLAYING</p><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
+      <div className="emulator-heading"><div><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
-        <div className="play-surface">
-          <div className="play-surface-top"><span><i /> WASM CORE</span><span>240 × 160</span></div>
+        <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`} ref={playSurfaceRef}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
             {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><strong>GBA<span>-</span>WASM</strong><small>Tap to skip</small></button>}
+            {!splashVisible && !runtimeError && paused && <button className="emulation-notice paused-notice" onClick={togglePause}><strong>Paused</strong><span>Press P or click to resume.</span></button>}
             {!splashVisible && runtimeError && <div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
             {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
-          <div className="play-surface-bottom"><span>{status}</span><span>GBA / 32-BIT</span></div>
+          {settings.touchControls && <TouchControls onChange={onTouchKeys} />}
         </div>
-        <aside className="emulator-aside">
-          <CartridgeMockup key={game.name} name={game.name} />
-          <p>ROM loaded into the WebAssembly runtime.</p>
-          <button className="secondary-button wide-button" onClick={onLoad}><ArrowDownToLine size={17} /> Replace ROM</button>
-          <div className="keyboard-note"><span>CONTROLS</span><div>{KEYBOARD_CONTROLS.map(([key, button]) => <span className="control" key={button}><kbd>{key}</kbd><small>{button}</small></span>)}</div></div>
-        </aside>
+        <aside className="emulator-aside">{cartridgeDetails}</aside>
       </div>
       <p className="emulator-disclaimer">The emulator core is in early development. Audio, EEPROM saves, and many BIOS services are not implemented, and accuracy varies by game.</p>
+      {showDetails && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowDetails(false)}>
+        <section className="settings-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="settings-modal-heading"><div><p className="eyebrow">CARTRIDGE</p><h2 id="details-title">Details</h2></div><button className="modal-close" onClick={() => setShowDetails(false)} aria-label="Close details"><X size={18} /></button></div>
+          {cartridgeDetails}
+        </section>
+      </div>}
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
           <label className="setting-row"><span><strong>Skip startup splash</strong><small>Start directly on the game display.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
+          <label className="setting-row"><span><strong>Sound</strong><small>Play game audio. Audio starts after your first key press or click.</small></span><input type="checkbox" checked={settings.sound} onChange={(event) => onSettingsChange({ ...settings, sound: event.target.checked })} /></label>
+          <label className="setting-row"><span><strong>Touch controls</strong><small>Show on-screen GBA buttons below the game.</small></span><input type="checkbox" checked={settings.touchControls} onChange={(event) => onSettingsChange({ ...settings, touchControls: event.target.checked })} /></label>
           <p className="settings-note">The GBA-WASM splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
         </section>
       </div>}

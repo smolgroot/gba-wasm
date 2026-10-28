@@ -25,6 +25,8 @@ const HLE_SVC_STACK: u32 = 0x0300_7FE0;
 /// Interrupt flags the game's IRQ handler reports to `IntrWait` (mirror of `0x03FFFFF8`).
 const BIOS_IRQ_FLAGS_ADDR: u32 = 0x0300_7FF8;
 const EXCEPTION_ENTRY_CYCLES: u32 = 3;
+/// Longest backward branch, in bytes, that may close an idle loop.
+const IDLE_LOOP_MAX_SPAN: u32 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionState {
@@ -104,6 +106,31 @@ enum HaltState {
     IntrWait { swi_address: u32 },
 }
 
+/// A short loop that may be spinning without side effects. Once two consecutive arrivals at
+/// `head` see the same registers, with only side-effect-free instructions in between and no
+/// reads of continuously changing registers, the loop cannot exit until something outside
+/// the CPU changes, so time can jump to the next event.
+#[derive(Debug, Clone, Copy)]
+struct IdleLoop {
+    head: u32,
+    registers: [u32; 16],
+    cpsr: u32,
+    snapshot_valid: bool,
+    pure: bool,
+}
+
+impl IdleLoop {
+    fn new(head: u32) -> Self {
+        Self {
+            head,
+            registers: [0; 16],
+            cpsr: 0,
+            snapshot_valid: false,
+            pure: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ThumbCpu {
     pub registers: [u32; 16],
@@ -118,6 +145,7 @@ pub struct ThumbCpu {
     spsr_bank: [u32; 5],
     halt: Option<HaltState>,
     intr_wait_resumed: bool,
+    idle_loop: Option<IdleLoop>,
 }
 
 impl ThumbCpu {
@@ -136,6 +164,7 @@ impl ThumbCpu {
             spsr_bank: [0; 5],
             halt: None,
             intr_wait_resumed: false,
+            idle_loop: None,
         }
     }
 
@@ -173,6 +202,7 @@ impl ThumbCpu {
         // DMA owns the bus while it runs, including while the CPU is halted.
         let dma_cycles = memory.run_pending_dma();
         if dma_cycles != 0 {
+            self.idle_loop = None;
             memory.advance_video_cycles(dma_cycles);
             return Ok(dma_cycles);
         }
@@ -193,12 +223,18 @@ impl ThumbCpu {
         if self.cpsr & CPSR_IRQ_DISABLE == 0 && memory.irq_line_asserted() {
             let return_address = self.registers[15].wrapping_add(4);
             self.enter_exception(CPSR_IRQ_MODE, IRQ_VECTOR, return_address);
+            self.idle_loop = None;
             memory.advance_video_cycles(EXCEPTION_ENTRY_CYCLES);
             return Ok(EXCEPTION_ENTRY_CYCLES);
         }
 
-        let cycles = self.instruction_cycles(memory);
         let faulting_pc = self.registers[15];
+        if let Some(idle_cycles) = self.idle_loop_skip(memory, faulting_pc) {
+            return Ok(idle_cycles);
+        }
+
+        let cycles = self.instruction_cycles(memory);
+        let side_effect_free = self.side_effect_free_instruction(memory);
         let result = if self.is_thumb() {
             self.step_thumb(memory)
         } else {
@@ -208,8 +244,90 @@ impl ThumbCpu {
             self.registers[15] = faulting_pc;
             return result.map(|_| cycles);
         }
+        self.track_idle_loop(faulting_pc, side_effect_free);
         memory.advance_video_cycles(cycles);
         Ok(cycles)
+    }
+
+    /// At the head of a confirmed idle loop, advances time to the next event instead of
+    /// executing. The snapshot is then dropped, so one real iteration runs after every
+    /// event and sees any register or memory the event changed.
+    fn idle_loop_skip(&mut self, memory: &mut MemoryMap, pc: u32) -> Option<u32> {
+        let idle = self.idle_loop.as_mut().filter(|idle| idle.head == pc)?;
+        let volatile_read = memory.take_volatile_read();
+        let unchanged = idle.snapshot_valid
+            && idle.pure
+            && !volatile_read
+            && idle.registers == self.registers
+            && idle.cpsr == self.cpsr;
+        if unchanged {
+            idle.snapshot_valid = false;
+            let cycles = memory.cycles_until_next_event();
+            memory.advance_video_cycles(cycles);
+            return Some(cycles);
+        }
+        *idle = IdleLoop {
+            registers: self.registers,
+            cpsr: self.cpsr,
+            snapshot_valid: true,
+            ..IdleLoop::new(pc)
+        };
+        None
+    }
+
+    fn track_idle_loop(&mut self, address: u32, side_effect_free: bool) {
+        if !side_effect_free {
+            if let Some(idle) = self.idle_loop.as_mut() {
+                idle.pure = false;
+            }
+            return;
+        }
+        let target = self.registers[15];
+        let short_backward_branch = target < address && address - target <= IDLE_LOOP_MAX_SPAN;
+        if short_backward_branch && self.idle_loop.is_none_or(|idle| idle.head != target) {
+            self.idle_loop = Some(IdleLoop::new(target));
+        }
+    }
+
+    /// Instructions that only change registers and flags: ALU operations, loads, and branches
+    /// without link. Stores, block transfers, PC writes other than branches, PSR transfers,
+    /// SWIs, and calls are excluded.
+    fn side_effect_free_instruction(&self, memory: &MemoryMap) -> bool {
+        if self.is_thumb() {
+            let opcode = memory.read_u16(self.registers[15] & !1);
+            return match opcode >> 11 {
+                0x00..=0x07 | 0x09 | 0x0D | 0x0F | 0x11 | 0x13 | 0x14 | 0x15 | 0x1C => true,
+                0x08 if opcode & 0x0400 == 0 => true, // ALU operations
+                0x08 => {
+                    let destination = (opcode & 0x7) | ((opcode >> 4) & 0x8);
+                    (opcode >> 8) & 3 != 3 && destination != 15
+                }
+                0x0A | 0x0B => (opcode >> 9) & 7 >= 3, // register-offset loads
+                0x1A | 0x1B => (opcode >> 8) & 0xF < 0xE, // conditional branches, not SWI
+                _ => false,
+            };
+        }
+
+        let opcode = memory.read_u32(self.registers[15] & !3);
+        let destination = (opcode >> 12) & 0xF;
+        if opcode >> 28 == 0xF {
+            return false;
+        }
+        match (opcode >> 25) & 7 {
+            0b101 => opcode & (1 << 24) == 0, // B, not BL
+            0b010 | 0b011 => opcode & (1 << 20) != 0 && destination != 15, // LDR/LDRB
+            0b000 if opcode & 0x90 == 0x90 => {
+                // Multiply, or a halfword/signed load; not stores or SWP.
+                let multiply = opcode & 0x60 == 0 && opcode & 0x0100_0000 == 0;
+                let halfword_load = opcode & 0x60 != 0 && opcode & (1 << 20) != 0;
+                (multiply || halfword_load) && destination != 15
+            }
+            0b000 | 0b001 => {
+                let psr_transfer = opcode & 0x0190_0000 == 0x0100_0000;
+                !psr_transfer && destination != 15
+            }
+            _ => false,
+        }
     }
 
     fn instruction_cycles(&self, memory: &MemoryMap) -> u32 {
@@ -1597,6 +1715,19 @@ impl ThumbCpu {
                 self.registers[0] = integer_square_root(self.registers[0]);
                 Ok(())
             }
+            0x09 => {
+                let (angle, a, b) = arctan(self.registers[0] as i32);
+                self.registers[0] = angle as u32;
+                self.registers[1] = a as u32;
+                self.registers[3] = b as u32;
+                Ok(())
+            }
+            0x0A => {
+                let x = self.registers[0] as i16 as i32;
+                let y = self.registers[1] as i16 as i32;
+                self.registers[0] = u32::from(arctan2(x, y));
+                Ok(())
+            }
             0x0B => {
                 self.cpu_set(memory);
                 Ok(())
@@ -1944,6 +2075,42 @@ fn affine_matrix(scale_x: i32, scale_y: i32, angle: u16) -> [i32; 4] {
         (scale_y * sine) >> 14,
         (scale_y * cosine) >> 14,
     ]
+}
+
+/// BIOS `ArcTan` polynomial for a 1.14 fixed-point tangent. Returns the angle
+/// (0x4000 = 90 degrees) and the intermediate values the BIOS leaves in r1 and r3.
+fn arctan(tangent: i32) -> (i32, i32, i32) {
+    let a = -(tangent.wrapping_mul(tangent) >> 14);
+    let mut b = ((0xA9 * a) >> 14) + 0x390;
+    for coefficient in [0x91C, 0xFB6, 0x16AA, 0x2081, 0x3651, 0xA2F9] {
+        b = (b.wrapping_mul(a) >> 14) + coefficient;
+    }
+    (tangent.wrapping_mul(b) >> 16, a, b)
+}
+
+/// BIOS `ArcTan2`: the angle of (x, y) as 0x0000-0xFFFF for a full turn.
+fn arctan2(x: i32, y: i32) -> u16 {
+    let arctan_of = |numerator: i32, denominator: i32| arctan((numerator << 14) / denominator).0;
+    let angle = if y == 0 {
+        if x >= 0 { 0 } else { 0x8000 }
+    } else if x == 0 {
+        if y >= 0 { 0x4000 } else { 0xC000 }
+    } else if y >= 0 {
+        if x >= 0 && x >= y {
+            arctan_of(y, x)
+        } else if x < 0 && -x >= y {
+            arctan_of(y, x) + 0x8000
+        } else {
+            0x4000 - arctan_of(x, y)
+        }
+    } else if x <= 0 && -x > -y {
+        arctan_of(y, x) + 0x8000
+    } else if x > 0 && x >= -y {
+        arctan_of(y, x) + 0x1_0000
+    } else {
+        0xC000 - arctan_of(x, y)
+    };
+    angle as u16
 }
 
 fn integer_square_root(value: u32) -> u32 {
@@ -2470,6 +2637,7 @@ mod tests {
         for offset in [0x021, 0x027, 0x031, 0x037] {
             expected_io[offset] = 0x01; // BG2/BG3 affine PA and PD = 1.0
         }
+        expected_io[0x089] = 0x02; // SOUNDBIAS = 0x200
         assert_eq!(memory.io, expected_io);
     }
 
@@ -2647,6 +2815,25 @@ mod tests {
     }
 
     #[test]
+    fn arctan2_returns_full_turn_angles_for_each_quadrant() {
+        let one = 0x4000; // 1.0 in 1.14 fixed point
+        assert_eq!(arctan2(one, 0), 0);
+        assert_eq!(arctan2(0, one), 0x4000);
+        assert_eq!(arctan2(-one, 0), 0x8000);
+        assert_eq!(arctan2(0, -one), 0xC000);
+        // 45-degree diagonals land within a unit or two of the exact angle.
+        for (x, y, expected) in [
+            (one, one, 0x2000),
+            (-one, one, 0x6000),
+            (-one, -one, 0xA000),
+            (one, -one, 0xE000),
+        ] {
+            let angle = i32::from(arctan2(x, y));
+            assert!((angle - expected).abs() <= 2, "({x}, {y}) -> {angle:#x}");
+        }
+    }
+
+    #[test]
     fn huffman_service_decodes_8_bit_units_into_words() {
         // Tree: root with two leaves, 'A' for bit 0 and 'B' for bit 1.
         let mut stream = vec![0x28, 0x04, 0x00, 0x00]; // type 2, 8-bit units, size 4
@@ -2791,6 +2978,7 @@ mod tests {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0xDF01, 0xDF01]));
         memory.write_u16(crate::memory::DISPCNT_ADDR, 0x1900);
+        memory.write_u8(0x0400_0084, 0x80); // sound master enable
         memory.write_u16(0x0400_0080, 0x1234); // SOUNDCNT_L
         memory.write_u16(0x0400_0128, 0x5678); // SIOCNT
         let mut cpu = ThumbCpu::new(ROM_BASE);

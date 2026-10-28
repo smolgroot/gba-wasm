@@ -14,6 +14,8 @@ export type GbaWasmEmulator = {
   load_backup: (data: Uint8Array) => void
   take_backup_dirty: () => boolean
   set_pressed_keys: (pressed: number) => void
+  take_audio_samples: () => Int16Array
+  audio_sample_rate: () => number
   free: () => void
 }
 
@@ -62,6 +64,8 @@ export async function loadGbaWasm(): Promise<GbaWasmModule> {
         load_backup: (data: Uint8Array) => emulator.load_backup(data),
         take_backup_dirty: () => emulator.take_backup_dirty(),
         set_pressed_keys: (pressed: number) => emulator.set_pressed_keys(pressed),
+        take_audio_samples: () => emulator.take_audio_samples(),
+        audio_sample_rate: () => emulator.audio_sample_rate(),
         free: () => emulator.free(),
       }
     },

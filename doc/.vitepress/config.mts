@@ -40,6 +40,7 @@ export default defineConfig({
           { text: 'Memory Map', link: '/rust-core/memory-map' },
           { text: 'ARM7TDMI CPU', link: '/rust-core/thumb-cpu' },
           { text: 'GPU Core', link: '/rust-core/gpu-core' },
+          { text: 'Audio (APU)', link: '/rust-core/apu' },
           { text: 'Testing Strategy', link: '/rust-core/testing-strategy' },
         ],
       },

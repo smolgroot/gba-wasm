@@ -71,3 +71,18 @@ export function attachKeyboard(target: Window, onChange: (pressed: number) => vo
     document.removeEventListener('visibilitychange', releaseAll)
   }
 }
+
+// tan(22.5°): each D-pad direction covers a 45° sector, so diagonals are as easy to hit as cardinals.
+const DPAD_SECTOR_SLOPE = Math.tan(Math.PI / 8)
+
+/**
+ * Maps a touch offset from the D-pad centre (normalised so the pad radius is 1, y pointing down)
+ * to the pressed direction bits. Touches inside the dead zone press nothing.
+ */
+export function dpadMaskForVector(dx: number, dy: number, deadZone = 0.2): number {
+  if (Math.hypot(dx, dy) < deadZone) return 0
+  let mask = 0
+  if (Math.abs(dx) > DPAD_SECTOR_SLOPE * Math.abs(dy)) mask |= dx > 0 ? GBA_KEYS.RIGHT : GBA_KEYS.LEFT
+  if (Math.abs(dy) > DPAD_SECTOR_SLOPE * Math.abs(dx)) mask |= dy > 0 ? GBA_KEYS.DOWN : GBA_KEYS.UP
+  return mask
+}

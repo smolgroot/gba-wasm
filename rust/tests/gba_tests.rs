@@ -109,3 +109,34 @@ fn jsmolka_suites_render_the_passed_screen_in_mode4() {
         include_bytes!("fixtures/gba-tests/memory.gba"),
     );
 }
+
+/// Pausing is not calling `step_frame`: the core has no wall-clock input, so a run that is
+/// paused and resumed must match an uninterrupted run exactly, frame for frame.
+#[test]
+fn paused_and_resumed_run_matches_an_uninterrupted_run() {
+    let rom = include_bytes!("fixtures/gba-tests/arm.gba");
+    let mut uninterrupted = GbaCore::new();
+    uninterrupted.load_rom(rom).unwrap();
+    let mut paused = GbaCore::new();
+    paused.load_rom(rom).unwrap();
+
+    let mut expected = Vec::new();
+    for _ in 0..FRAMES_TO_RESULT_SCREEN {
+        expected.push(uninterrupted.step_frame().unwrap());
+    }
+    let mut resumed = Vec::new();
+    for frame in 0..FRAMES_TO_RESULT_SCREEN {
+        if frame == 4 {
+            // A paused browser keeps forwarding key releases but does not step.
+            paused.set_pressed_keys(0);
+        }
+        resumed.push(paused.step_frame().unwrap());
+    }
+
+    assert_eq!(resumed, expected);
+    assert_eq!(paused.cpu.registers, uninterrupted.cpu.registers);
+    assert_eq!(
+        paused.memory.vblanks_started(),
+        FRAMES_TO_RESULT_SCREEN as u64
+    );
+}

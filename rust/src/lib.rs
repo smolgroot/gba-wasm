@@ -1,3 +1,4 @@
+mod apu;
 mod backup;
 mod bios;
 mod cartridge;
@@ -5,6 +6,7 @@ mod cpu;
 mod gpu;
 mod memory;
 
+pub use apu::SAMPLE_RATE as AUDIO_SAMPLE_RATE;
 pub use backup::{BackupKind, BackupSizeMismatch};
 pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ExecutionState, MAX_FRAME_INSTRUCTIONS, ROM_BASE, ThumbCpu};
@@ -296,6 +298,112 @@ mod tests {
         }
     }
 
+    /// Builds a cartridge whose entry branches to `program` (ARM, at 0xC0) followed by
+    /// `handler` (ARM, installed as the IRQ handler when `install_handler` is set).
+    fn arm_rom(program: &[u32], handler: &[u32]) -> (Vec<u8>, u32) {
+        let mut rom = cartridge::synthetic_rom(*b"LOOP", [0x2E, 0x00, 0x00, 0xEA]);
+        rom.resize(0xC0, 0);
+        for word in program {
+            rom.extend(word.to_le_bytes());
+        }
+        let handler_address = ROM_BASE + rom.len() as u32;
+        for word in handler {
+            rom.extend(word.to_le_bytes());
+        }
+        (rom, handler_address)
+    }
+
+    #[test]
+    fn idle_loop_is_skipped_but_exits_when_the_irq_handler_sets_its_flag() {
+        let (rom, handler) = arm_rom(
+            &[
+                0xE3A0_2403, // MOV r2, #0x03000000          (flag address)
+                0xE592_1000, // loop: LDR r1, [r2]
+                0xE351_0000, // CMP r1, #0
+                0x0AFF_FFFC, // BEQ loop
+                0xE3A0_002A, // MOV r0, #42
+                0xEAFF_FFFE, // B .
+            ],
+            &[
+                0xE3A0_3403, // MOV r3, #0x03000000
+                0xE3A0_1001, // MOV r1, #1
+                0xE583_1000, // STR r1, [r3]                 (set the flag)
+                0xE3A0_3301, // MOV r3, #0x04000000
+                0xE283_3C02, // ADD r3, r3, #0x200
+                0xE1C3_10B2, // STRH r1, [r3, #2]            (acknowledge VBlank)
+                0xE12F_FF1E, // BX lr
+            ],
+        );
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+        core.memory.write_u32(0x0300_7FFC, handler);
+        core.memory.write_u16(DISPSTAT_ADDR, 1 << 3);
+        core.memory.write_u16(IE_ADDR, 1);
+        core.memory.write_u16(IME_ADDR, 1);
+
+        let mut steps = 0;
+        while core.cpu.registers[0] != 42 {
+            core.cpu.step(&mut core.memory).unwrap();
+            steps += 1;
+            assert!(steps < 5_000, "the idle loop was not skipped");
+        }
+
+        assert_eq!(core.memory.vblanks_started(), 1);
+        let vblank_start = VISIBLE_SCANLINES * CYCLES_PER_SCANLINE;
+        assert!(
+            core.memory.frame_cycle() - vblank_start < 100,
+            "the loop exits right after the VBlank interrupt"
+        );
+    }
+
+    #[test]
+    fn countdown_loop_is_executed_instruction_by_instruction() {
+        let (rom, _) = arm_rom(
+            &[
+                0xE3A0_0FFA, // MOV r0, #1000
+                0xE250_0001, // loop: SUBS r0, r0, #1
+                0x1AFF_FFFD, // BNE loop
+                0xEAFF_FFFE, // B .
+            ],
+            &[],
+        );
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+
+        // Entry branch and MOV, then 998 SUBS/BNE pairs and one more SUBS: 999 decrements.
+        core.cpu
+            .run_steps(&mut core.memory, 2 + 998 * 2 + 1)
+            .unwrap();
+        assert_eq!(core.cpu.registers[0], 1);
+        core.cpu.run_steps(&mut core.memory, 2).unwrap();
+        assert_eq!(core.cpu.registers[0], 0);
+    }
+
+    #[test]
+    fn loop_polling_a_timer_counter_is_not_fast_forwarded_past_its_value() {
+        let (rom, _) = arm_rom(
+            &[
+                0xE3A0_3301, // MOV r3, #0x04000000
+                0xE283_3C01, // ADD r3, r3, #0x100           (TM0CNT_L)
+                0xE1D3_10B0, // loop: LDRH r1, [r3]
+                0xE351_0002, // CMP r1, #2
+                0x3AFF_FFFC, // BLO loop
+                0xEAFF_FFFE, // B .
+            ],
+            &[],
+        );
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+        core.memory.write_u8(TIMER0_ADDR + 2, 0x83); // enable, prescaler 1024
+
+        let mut cycles = 0;
+        while core.cpu.registers[1] < 2 || core.cpu.registers[15] != ROM_BASE + 0xD4 {
+            cycles += core.cpu.step_with_cycles(&mut core.memory).unwrap();
+            assert!(cycles < 4 * 1024, "skipped past the polled counter value");
+        }
+        assert!(cycles >= 2 * 1024);
+    }
+
     #[test]
     fn halted_cpu_wakes_on_the_exact_vblank_request() {
         let mut rom = cartridge::synthetic_rom(*b"HALT", [0x2E, 0x00, 0x00, 0xEA]);
@@ -404,6 +512,16 @@ impl WasmEmulator {
             .backup
             .load(data)
             .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Removes and returns the audio produced so far: interleaved left/right 16-bit samples
+    /// at `audio_sample_rate()` Hz.
+    pub fn take_audio_samples(&mut self) -> Vec<i16> {
+        self.core.memory.apu.take_samples()
+    }
+
+    pub fn audio_sample_rate(&self) -> u32 {
+        AUDIO_SAMPLE_RATE
     }
 
     /// True when save data changed since the last call.

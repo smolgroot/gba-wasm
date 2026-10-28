@@ -32,9 +32,11 @@ Backup memory is mapped at `0x0E000000`-`0x0FFFFFFF` with a 64 KiB window (`rust
 | `SRAM_V`, `SRAM_F_V` | SRAM | 32 KiB |
 | `FLASH_V`, `FLASH512_V` | Flash (reports Panasonic ID `0x1B32`) | 64 KiB |
 | `FLASH1M_V` | Flash (reports Sanyo ID `0x1362`), two 64 KiB banks | 128 KiB |
-| `EEPROM_V` | EEPROM, not emulated | none |
+| `EEPROM_V` | EEPROM, 512 bytes or 8 KiB | see below |
 
-Flash implements the `0xAA`/`0x55` unlock sequence and these commands: ID mode, chip erase, 4 KiB sector erase, byte program (which can only clear bits), and bank select. Commands complete instantly. The backup bus is 8 bits wide: halfword and word reads repeat the addressed byte, and wide writes store only the addressed byte lane. EEPROM and absent backup read `0xFF`. `Backup::take_dirty` reports changes so the browser can persist them (see [WASM Boundary](../architecture/wasm-boundary.md)).
+Flash implements the `0xAA`/`0x55` unlock sequence and these commands: ID mode, chip erase, 4 KiB sector erase, byte program (which can only clear bits), and bank select. Commands complete instantly. The backup bus is 8 bits wide: halfword and word reads repeat the addressed byte, and wide writes store only the addressed byte lane. Absent backup reads `0xFF`. `Backup::take_dirty` reports changes so the browser can persist them (see [WASM Boundary](../architecture/wasm-boundary.md)).
+
+EEPROM is accessed bit-serially through DMA3: one bit per halfword in `0x0D000000`-`0x0DFFFFFF`, or only the top 256 bytes of that range for ROMs larger than 16 MiB. A read request is `11` + address + stop bit, followed by a 68-unit read: 4 ignored bits and the 64-bit block, most significant bit first. A write is `10` + address + 64 data bits + stop bit. The address width cannot be read from the cartridge, so it comes from the length of the first DMA request: 9 or 73 units means 6 bits (512 bytes), and 17 or 81 units means 14 bits (8 KiB). Saved data of either size also sets it. Writes complete instantly, and an idle EEPROM reads `1` (ready).
 
 ## I/O registers
 
@@ -50,11 +52,11 @@ The I/O window is `0x04000000`-`0x040003FF`.
 
 ## DMA
 
-Enabling a channel latches its source, destination, and count (`0` means `0x4000` units, or `0x10000` for DMA3). Immediate transfers start at once. VBlank transfers start when the display enters VBlank, and HBlank transfers start on HBlanks of visible lines only. A transfer runs to completion before the CPU's next step, and the lowest channel has priority. Destination and source address control (increment, decrement, fixed, increment/reload), 16/32-bit units, repeat, end-of-transfer interrupts, and clearing the enable bit when a non-repeating transfer finishes are modeled. GamePak sources always increment. Each transfer costs 2 cycles plus 2 per unit. Sound FIFO and video capture timing (start timing 3) and Game Pak DRQ are not modeled, and those transfers never start.
+Enabling a channel latches its source, destination, and count (`0` means `0x4000` units, or `0x10000` for DMA3). Immediate transfers start at once. VBlank transfers start when the display enters VBlank, and HBlank transfers start on HBlanks of visible lines only. A transfer runs to completion before the CPU's next step, and the lowest channel has priority. Destination and source address control (increment, decrement, fixed, increment/reload), 16/32-bit units, repeat, end-of-transfer interrupts, and clearing the enable bit when a non-repeating transfer finishes are modeled. GamePak sources always increment. Each transfer costs 2 cycles plus 2 per unit. DMA1 and DMA2 with special timing (start timing 3) serve the sound FIFOs ([Audio](./apu.md)). Video capture (DMA3 special timing) and Game Pak DRQ are not modeled, and those transfers never start.
 
 ## Clock
 
-CPU work advances display state, timers, and DMA triggers through `MemoryMap::advance_video_cycles`. `vblanks_started` counts VBlank entries and defines frame boundaries. `cycles_until_next_event` returns the distance to the next HBlank, line start, or timer overflow, which lets a halted CPU skip idle time without moving an interrupt.
+CPU work advances display state, timers, and DMA triggers through `MemoryMap::advance_video_cycles`. `vblanks_started` counts VBlank entries and defines frame boundaries. `cycles_until_next_event` returns the distance to the next HBlank, line start, or timer overflow, which lets a halted CPU or an idle loop skip time without moving an interrupt. `take_volatile_read` reports reads of registers that change between those events (timer counters and `SOUNDCNT_X`), so polling loops on them are never skipped.
 
 ## Validation
 
