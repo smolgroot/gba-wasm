@@ -1,3 +1,4 @@
+mod bios;
 mod cartridge;
 mod cpu;
 mod gpu;
@@ -7,9 +8,9 @@ pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ExecutionState, MAX_FRAME_INSTRUCTIONS, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::{
-    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, IE_ADDR, IF_ADDR, IME_ADDR,
-    KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap, SCANLINES_PER_FRAME, TIMER0_ADDR, VCOUNT_ADDR,
-    VISIBLE_SCANLINES, WAITCNT_ADDR,
+    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, DMA0_ADDR, IE_ADDR,
+    IF_ADDR, IME_ADDR, KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap, SCANLINES_PER_FRAME, TIMER0_ADDR,
+    VCOUNT_ADDR, VISIBLE_SCANLINES, WAITCNT_ADDR,
 };
 
 use std::fmt;
@@ -88,14 +89,13 @@ impl GbaCore {
             return Err(CpuError::EmptyCartridge.into());
         }
 
-        let mut elapsed_cycles = 0u32;
+        // A frame ends when the display enters VBlank, after all 160 visible lines.
+        let frame = self.memory.vblanks_started();
         for _ in 0..MAX_FRAME_INSTRUCTIONS {
-            elapsed_cycles = elapsed_cycles.saturating_add(
-                self.cpu
-                    .step_with_cycles(&mut self.memory)
-                    .map_err(GbaError::Cpu)?,
-            );
-            if elapsed_cycles >= CYCLES_PER_FRAME {
+            self.cpu
+                .step_with_cycles(&mut self.memory)
+                .map_err(GbaError::Cpu)?;
+            if self.memory.vblanks_started() != frame {
                 return Ok(self.render_frame());
             }
         }
@@ -214,6 +214,47 @@ mod tests {
         assert_eq!(core.cpu.registers[0], 42);
         assert_eq!(core.cpu.registers[15], ROM_BASE + 0xC4);
         assert!(!core.cpu.is_thumb());
+    }
+
+    #[test]
+    fn step_frame_returns_at_each_vblank_start() {
+        let rom = cartridge::synthetic_rom(*b"IDLE", [0xFE, 0xFF, 0xFF, 0xEA]); // B .
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+
+        for frame in 1..=3 {
+            core.step_frame().unwrap();
+            assert_eq!(core.memory.vblanks_started(), frame);
+            assert_eq!(core.memory.read_u16(VCOUNT_ADDR), VISIBLE_SCANLINES as u16);
+            assert_ne!(core.memory.read_u16(DISPSTAT_ADDR) & 1, 0);
+        }
+    }
+
+    #[test]
+    fn halted_cpu_wakes_on_the_exact_vblank_request() {
+        let mut rom = cartridge::synthetic_rom(*b"HALT", [0x2E, 0x00, 0x00, 0xEA]);
+        rom.resize(0xC0, 0);
+        rom.extend(0xEF02_0000u32.to_le_bytes()); // SWI Halt
+        rom.extend(0xEAFF_FFFEu32.to_le_bytes()); // B .
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+        core.memory.write_u16(DISPSTAT_ADDR, 1 << 3);
+        core.memory.write_u16(IE_ADDR, 1);
+
+        core.cpu.run_steps(&mut core.memory, 2).unwrap(); // B to entry; SWI Halt
+        let mut halted_steps = 0;
+        while core.memory.read_u16(IF_ADDR) == 0 {
+            core.cpu.step(&mut core.memory).unwrap();
+            halted_steps += 1;
+        }
+
+        assert_eq!(core.memory.read_u16(VCOUNT_ADDR), VISIBLE_SCANLINES as u16);
+        assert!(
+            halted_steps <= 2 * VISIBLE_SCANLINES,
+            "halt skipped {halted_steps} times"
+        );
+        core.cpu.step(&mut core.memory).unwrap(); // resumes at the B . after the SWI
+        assert_eq!(core.cpu.registers[15], ROM_BASE + 0xC4);
     }
 
     #[test]

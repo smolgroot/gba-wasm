@@ -6,6 +6,7 @@ The first milestone defines the addressable memory layout used by the emulator c
 
 | Region | Size | Purpose |
 | --- | --- | --- |
+| BIOS | 16 KiB | generated HLE image at `0x00000000` (vectors and IRQ dispatcher; see [ARM7TDMI CPU](./thumb-cpu.md)) |
 | EWRAM | 256 KiB | external work RAM |
 | IWRAM | 32 KiB | internal work RAM |
 | VRAM | 96 KiB | video memory |
@@ -14,14 +15,33 @@ The first milestone defines the addressable memory layout used by the emulator c
 | I/O | 1 KiB | mapped hardware registers |
 | Cartridge | loaded ROM | read-only data mapped at `0x08000000` through `0x0DFFFFFF` |
 
-## Implementation notes
+## Bus behavior
 
-The current implementation keeps memory regions as contiguous byte arrays in `MemoryMap`. Halfword and word bus accesses align down to their access width; ARM unaligned word loads apply the architecture's rotate behavior in the CPU. The 1 KiB modeled I/O window is visible only at `0x04000000` through `0x040003FF`. `DISPCNT` masks reserved bit 3, while `DISPSTAT` and read-only `VCOUNT` cover the display registers used by the bitmap path. Enabled VBlank, HBlank, and VCount events set their pending bits in `IF`. `KEYINPUT` exposes ten active-low buttons (no input reads as `0x03FF`) and can be driven through `MemoryMap::set_pressed_keys`; `KEYCNT` implements OR/AND matching and raises the keypad request when its condition becomes active. `IE`, `IF`, `WAITCNT`, and `IME` have their writable masks and `IF` is write-one-to-clear. Timers 0–3 implement reload/counter behavior, the 1/64/256/1024 prescalers, cascade mode, and timer overflow requests in `IF`; the CPU does not yet enter IRQ exceptions. CPU instructions advance video and timers using family-level cycle estimates, without cartridge/device wait states. Scanlines are 1,232 cycles, frames are 228 scanlines, and modeled HBlank status starts at cycle 1,006. `MemoryMap::advance_video_cycles` and `GbaCore::advance_video_cycles` also allow explicit clock advancement. Unimplemented I/O reads return zero and writes are ignored, a temporary approximation rather than open-bus emulation. The VRAM aperture mirrors the final 32 KiB into addresses `0x06018000` through `0x0601FFFF`.
+`MemoryMap` keeps each region as a contiguous byte array. EWRAM, IWRAM, palette, VRAM, and OAM mirror across their 16 MiB areas, and the VRAM aperture mirrors the final 32 KiB into `0x06018000`-`0x0601FFFF`. Halfword and word accesses align down to their width; the CPU applies the ARM7TDMI rotation for misaligned loads.
 
-Mode 3 uses the first 76,800 bytes of VRAM as a 240 x 160 array of little-endian RGB555 pixels.
+Video memory has a 16-bit bus. A byte store to palette RAM, or to background VRAM (`0x06000000`-`0x0600FFFF` in tile modes, up to `0x06013FFF` in bitmap modes 3-5), writes the byte to both halves of the halfword. Byte stores to OBJ VRAM and OAM are ignored.
 
-Each cartridge ROM window (`0x08000000`, `0x0A000000`, and `0x0C000000`) maps the same loaded image at offset zero. Reads past the loaded image return `0xFF`; the image is not repeated by its own length. Images are limited to 32 MiB, the size of one ROM window. ROM writes are ignored; backup RAM and cartridge-specific wait states are not implemented.
+Each cartridge ROM window (`0x08000000`, `0x0A000000`, `0x0C000000`) maps the loaded image at offset zero, and reads past the image return `0xFF`. Images are limited to 32 MiB. ROM writes are ignored. Backup RAM, cartridge wait states, BIOS read protection, and open-bus values are not modeled. Unmapped addresses read `0`, which is an approximation.
+
+## I/O registers
+
+The I/O window is `0x04000000`-`0x040003FF`.
+
+- **Display:** `DISPCNT` masks reserved bit 3. `DISPSTAT` exposes VBlank (lines 160-226), HBlank (from cycle 1,006 of each 1,232-cycle line), and VCount-match status, and requests enabled VBlank/HBlank/VCount interrupts. `VCOUNT` is read-only. A frame is 228 lines.
+- **Interrupts:** `IE`, `IF` (write-one-to-clear), `IME`, and `WAITCNT` have their writable masks.
+- **Keypad:** `KEYINPUT` exposes ten active-low buttons driven by `set_pressed_keys`. `KEYCNT` implements OR/AND interrupt conditions.
+- **Timers 0-3:** reload/counter, 1/64/256/1024 prescalers, cascade, and overflow interrupts.
+- **DMA 0-3:** see below.
+- **Other registers:** all other writes are stored for the devices that consume them. `BGxCNT`, `WININ`/`WINOUT`, `BLDCNT`, `BLDALPHA`, the DMA control halfwords, and `POSTFLG` read back through their documented masks. Write-only and unimplemented registers read `0`, which is an approximation rather than open-bus emulation.
+
+## DMA
+
+Enabling a channel latches its source, destination, and count (`0` means `0x4000` units, or `0x10000` for DMA3). Immediate transfers start at once. VBlank transfers start when the display enters VBlank, and HBlank transfers start on HBlanks of visible lines only. A transfer runs to completion before the CPU's next step, and the lowest channel has priority. Destination and source address control (increment, decrement, fixed, increment/reload), 16/32-bit units, repeat, end-of-transfer interrupts, and clearing the enable bit when a non-repeating transfer finishes are modeled. GamePak sources always increment. Each transfer costs 2 cycles plus 2 per unit. Sound FIFO and video capture timing (start timing 3) and Game Pak DRQ are not modeled, and those transfers never start.
+
+## Clock
+
+CPU work advances display state, timers, and DMA triggers through `MemoryMap::advance_video_cycles`. `vblanks_started` counts VBlank entries and defines frame boundaries. `cycles_until_next_event` returns the distance to the next HBlank, line start, or timer overflow, which lets a halted CPU skip idle time without moving an interrupt.
 
 ## Validation
 
-Rust tests cover aligned and unaligned halfword/word access, EWRAM/IWRAM/palette/OAM mirrors, I/O window boundaries and inert unimplemented registers, `DISPCNT` reserved-bit behavior, timer overflow IRQ requests, keypad OR/AND conditions, direct VRAM access and its mirrored aperture, ROM read-only mapping across windows, and reads beyond a loaded image.
+Rust unit tests cover region mirrors and boundaries, aligned and unaligned accesses, video byte-store rules, stored I/O masks, display status and interrupts, timers, keypad conditions, DMA (immediate, fixed/decrementing addresses, repeating HBlank with destination reload, VBlank lines excluded), frame counting, and next-event calculation. The `memory.gba` suite from jsmolka/gba-tests checks mirrors and video byte stores.

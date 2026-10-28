@@ -11,20 +11,16 @@ The Rust core follows a small, explicit testing strategy tuned for emulator work
 
 ## Current coverage
 
-The milestone includes tests for:
+Unit tests live next to the code in `rust/src`. They cover the memory map, I/O devices (display status, interrupts, timers, keypad, DMA), CPU instructions and ARM7TDMI edge cases, IRQ entry and return through the HLE BIOS, BIOS services, cartridge header validation, and the bitmap renderers.
 
-- memory map read/write semantics
-- GPU pixel drawing within a framebuffer
-- Thumb instruction execution and unsupported-opcode reporting
-- ARM HLE entry state, branch, and ARM-to-Thumb exchange
-- ROM-to-VRAM-to-frame integration
-- a generated, non-copyrighted ARM Mode 3 startup fixture that branches past the GBA header, writes a red VRAM pixel, enables `DISPCNT` Mode 3 and BG2, and reaches a deterministic frame after eight instructions
+Two generated fixtures in `rust/src/lib.rs` exercise the boot path. `generated_arm_mode3_startup_fixture` branches past the header, writes a red Mode 3 pixel, and enables BG2. The halt fixture checks that `SWI Halt` wakes on the exact VBlank request.
 
-The fixture source is `generated_arm_mode3_startup_fixture` in `rust/src/lib.rs`. Its tested path is ARM `B`, `MOV`, word `STR`, and halfword `STRH`; the assertion checks the Mode 3 register, final PC, and first framebuffer pixel.
+## External test ROMs
 
-## Recommended next additions
+`rust/tests/gba_tests.rs` runs `arm.gba`, `thumb.gba`, and `memory.gba` from [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (MIT; commit `a7113b6`). The binaries and license are vendored in `rust/tests/fixtures/gba-tests/`. Each ROM ends in an ARM `B .` loop with the first failed test number in `r12`, or in `r7` for `thumb.gba`. The harness requires `0`, then boots each ROM through `step_frame` and checks the rendered Mode 4 "All tests passed" screen.
 
-- CPU instruction decode tests
-- memory timing tests
-- sprite and background object behavior
-- framebuffer comparison snapshots for known patterns
+`bios.gba` is not vendored. It checks values read from the real BIOS image, which an HLE BIOS cannot reproduce.
+
+## Commercial ROMs
+
+Commercial ROMs must never be added to the repository; `rom/` is git-ignored for local experiments. Passing tests do not imply that any commercial game boots.

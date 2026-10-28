@@ -18,10 +18,10 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 
 - `DONE` Rust/WASM build and browser integration.
 - `DONE` GBA-sized RAM/video storage, cartridge validation and windows, a generated ARM Mode 3 fixture, and a stateful browser frame loop.
-- `IN PROGRESS` Display status timing and VBlank/HBlank/VCount IRQ requests, family-level CPU cycle estimates, timer behavior, and keypad OR/AND interrupt requests.
-- `DONE` A documented partial ARM/Thumb instruction set and HLE-only entry path; this is not a real BIOS implementation.
+- `DONE` ARMv4T ARM/Thumb interpreter passing the jsmolka/gba-tests ARM, Thumb, and memory suites, with IRQ exception delivery through a generated HLE BIOS image. This is not a real BIOS implementation.
+- `DONE` Display status and VBlank/HBlank/VCount IRQs, timers, keypad interrupts, DMA (immediate/VBlank/HBlank), VBlank-aligned frame stepping, and bitmap Modes 3-5.
 
-Full ARM7TDMI coverage, BIOS execution, interrupt exception delivery, most I/O registers, DMA, backup saves, audio, and most graphics features are not implemented.
+Tile modes, objects, windows, blending, backup saves, audio (including sound FIFO DMA), wait states, and most BIOS services are not implemented.
 
 ## Completed stories
 
@@ -89,7 +89,7 @@ Acceptance criteria:
 
 ### BOOT-01: Define the BIOS and HLE boot contract
 
-**Status:** `BACKLOG`  
+**Status:** `DONE`  
 **Priority:** `P0`  
 **Depends on:** CPU-01, CPU-02
 
@@ -102,9 +102,11 @@ Acceptance criteria:
 - Implement only the BIOS services required by the selected homebrew fixture and return explicit errors for unsupported services.
 - Verify the fixture reaches its documented entry/checkpoint with each supported boot path.
 
+HLE-only boot is documented in [ARM7TDMI CPU](doc/rust-core/thumb-cpu.md#boot-contract). The jsmolka/gba-tests ROMs reach their idle-loop checkpoint through it.
+
 ### BUS-01: Implement hardware-visible memory and I/O behavior
 
-**Status:** `IN PROGRESS`
+**Status:** `DONE`
 **Priority:** `P0`  
 **Depends on:** ROM-01, CPU-01
 
@@ -120,7 +122,7 @@ Acceptance criteria:
 
 ### PPU-01: Render a homebrew-compatible display mode
 
-**Status:** `BACKLOG`  
+**Status:** `DONE`  
 **Priority:** `P0`  
 **Depends on:** BUS-01
 
@@ -133,9 +135,11 @@ Acceptance criteria:
 - The display reads emulated VRAM, palette, and OAM as required; the browser does not synthesize graphics input.
 - Compare output against a deterministic known frame or pixel assertions from the fixture.
 
+The fixture is jsmolka/gba-tests (Mode 4). Its "All tests passed" screen is checked by pixel bounds and frame hash.
+
 ### TIME-01: Add bounded machine-cycle progression
 
-**Status:** `IN PROGRESS`
+**Status:** `DONE`
 **Priority:** `P0`  
 **Depends on:** CPU-01, BUS-01, PPU-01
 
@@ -150,7 +154,7 @@ Acceptance criteria:
 
 ### ROM-02: Boot the first real homebrew cartridge
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P0`  
 **Depends on:** ROM-01, CPU-02, BOOT-01, BUS-01, PPU-01, TIME-01
 
@@ -163,6 +167,8 @@ Acceptance criteria:
 - The run can be repeated deterministically and produces a recorded screenshot or pixel-test result.
 - Browser status distinguishes loading, running, paused, and emulation errors.
 - Record the exact supported fixture and known limitations; do not generalize one passing game into broad compatibility.
+
+The `arm.gba`, `thumb.gba`, and `memory.gba` test ROMs (MIT, provenance in `rust/tests/fixtures/gba-tests/README.md`) boot deterministically to their pixel-tested result screen. Remaining: the browser has no paused state (see UI-01).
 
 ## P1: Usable emulator shell
 
@@ -209,7 +215,7 @@ Acceptance criteria:
 
 ### CPU-03: Complete the ARM7TDMI instruction set needed by targets
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P2`  
 **Depends on:** CPU-01, CPU-02
 
@@ -219,9 +225,11 @@ Acceptance criteria:
 - Validate flags, shifts, exceptions, banked registers, and load/store behavior with instruction-level tests.
 - Add an external CPU test corpus where licensing permits and record unsupported families.
 
+All ARMv4T instruction classes are implemented, and the jsmolka/gba-tests ARM and Thumb suites pass. Undefined-instruction exceptions and coprocessor encodings are reported as errors.
+
 ### DMA-01: Implement DMA and interrupt delivery
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P2`  
 **Depends on:** BUS-01, TIME-01
 
@@ -230,6 +238,8 @@ Acceptance criteria:
 - Model DMA channels, transfer widths, timing triggers, and register side effects required by selected target ROMs.
 - Deliver interrupt requests through CPU exception state with tested priority and return behavior.
 - Add deterministic tests for transfers, trigger conditions, and interrupt entry/return.
+
+Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatcher are implemented and tested. Remaining: sound FIFO and video capture timing, and validation against selected target ROMs.
 
 ### AUDIO-01: Implement GBA audio output
 
