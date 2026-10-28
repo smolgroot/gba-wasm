@@ -9,12 +9,16 @@ export type GbaWasmModule = {
 
 export type GbaWasmEmulator = {
   step_frame: () => Uint8ClampedArray
+  backup_type: () => string
+  backup_data: () => Uint8Array
+  load_backup: (data: Uint8Array) => void
+  take_backup_dirty: () => boolean
+  set_pressed_keys: (pressed: number) => void
   free: () => void
 }
 
-type GeneratedWasmEmulator = {
+type GeneratedWasmEmulator = Omit<GbaWasmEmulator, 'step_frame'> & {
   step_frame: () => Uint8Array
-  free: () => void
 }
 
 type GeneratedWasmModule = {
@@ -53,6 +57,11 @@ export async function loadGbaWasm(): Promise<GbaWasmModule> {
       const emulator = new mod.WasmEmulator(rom)
       return {
         step_frame: () => new Uint8ClampedArray(emulator.step_frame()),
+        backup_type: () => emulator.backup_type(),
+        backup_data: () => emulator.backup_data(),
+        load_backup: (data: Uint8Array) => emulator.load_backup(data),
+        take_backup_dirty: () => emulator.take_backup_dirty(),
+        set_pressed_keys: (pressed: number) => emulator.set_pressed_keys(pressed),
         free: () => emulator.free(),
       }
     },

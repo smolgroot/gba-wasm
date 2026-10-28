@@ -48,7 +48,7 @@ Encodings that are undefined on ARMv4T (the NV condition, coprocessor instructio
 
 | SWI | Service | Notes |
 | --- | --- | --- |
-| `0x01` | RegisterRamReset | Low-byte flags only; reserved flags are rejected. |
+| `0x01` | RegisterRamReset | Memory regions and the serial, sound, and other register groups selected by the low byte. Reserved flags are rejected. |
 | `0x02` | Halt | Waits for `IE & IF != 0`. |
 | `0x04` | IntrWait | Sets `IME`, then waits until the game's IRQ handler sets a requested bit in the BIOS flags at `0x03007FF8`, and clears it. With `r0 = 1`, previously set flags are discarded first. |
 | `0x05` | VBlankIntrWait | `IntrWait` with `r0 = 1, r1 = 1`. |
@@ -56,7 +56,11 @@ Encodings that are undefined on ARMv4T (the NV condition, coprocessor instructio
 | `0x08` | Sqrt | Integer square root. |
 | `0x0B` | CpuSet | Halfword/word copy or fixed-source fill. |
 | `0x0C` | CpuFastSet | Word count rounded up to whole 8-word blocks. |
+| `0x0E` | BgAffineSet | Matrix plus reference point from the texture and screen centers. |
+| `0x0F` | ObjAffineSet | Matrices written with the stride in `r3`. Sine/cosine come from a 1.14 fixed-point table and may differ from the BIOS table by one unit. |
 | `0x11`, `0x12` | LZ77UnCompWram/Vram | The VRAM variant writes halfwords. |
+| `0x13` | HuffUnComp | 4- and 8-bit data units, written as words. |
+| `0x14`, `0x15` | RLUnCompWram/Vram | The VRAM variant writes halfwords. |
 
 Any other service, or a wait with an empty interrupt mask, returns `UnsupportedBiosCall`.
 

@@ -19,9 +19,11 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 - `DONE` Rust/WASM build and browser integration.
 - `DONE` GBA-sized RAM/video storage, cartridge validation and windows, a generated ARM Mode 3 fixture, and a stateful browser frame loop.
 - `DONE` ARMv4T ARM/Thumb interpreter passing the jsmolka/gba-tests ARM, Thumb, and memory suites, with IRQ exception delivery through a generated HLE BIOS image. This is not a real BIOS implementation.
-- `DONE` Display status and VBlank/HBlank/VCount IRQs, timers, keypad interrupts, DMA (immediate/VBlank/HBlank), VBlank-aligned frame stepping, and bitmap Modes 3-5.
+- `DONE` Display status and VBlank/HBlank/VCount IRQs, timers, keypad interrupts, DMA (immediate/VBlank/HBlank), and VBlank-aligned frame stepping.
+- `DONE` Scanline PPU for all display modes, with objects, windows, and blending.
+- `IN PROGRESS` SRAM/Flash saves persisted in the browser, and keyboard input.
 
-Tile modes, objects, windows, blending, backup saves, audio (including sound FIFO DMA), wait states, and most BIOS services are not implemented.
+Audio (including sound FIFO DMA), EEPROM saves, touch controls, pause/resume, wait states, and several BIOS services are not implemented.
 
 ## Completed stories
 
@@ -137,6 +139,23 @@ Acceptance criteria:
 
 The fixture is jsmolka/gba-tests (Mode 4). Its "All tests passed" screen is checked by pixel bounds and frame hash.
 
+### PPU-02: Render tile modes, objects, windows, and blending
+
+**Status:** `DONE`
+**Priority:** `P1`
+**Depends on:** PPU-01, TIME-01
+
+As a user, I want games that use tiled backgrounds and sprites to display, because nearly all commercial and most homebrew software uses them.
+
+Acceptance criteria:
+
+- Render text and affine backgrounds, objects, windows, and color effects from emulated state.
+- Render each line with the state at its HBlank so that raster effects work.
+- Cover each feature with focused pixel tests, including a raster-effect test driven through `step_frame`.
+- Document the features that are not modeled.
+
+Details are in [GPU Core](doc/rust-core/gpu-core.md). Object cycle limits, affine/bitmap mosaic, and mid-line changes are not modeled.
+
 ### TIME-01: Add bounded machine-cycle progression
 
 **Status:** `DONE`
@@ -187,7 +206,7 @@ Acceptance criteria:
 
 ### INPUT-01: Map keyboard and touch controls
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P1`  
 **Depends on:** BUS-01
 
@@ -198,9 +217,11 @@ Acceptance criteria:
 - Focus loss and pointer cancellation cannot leave buttons stuck.
 - Add unit tests for input-bit mapping and browser interaction checks for touch controls.
 
+Keyboard input is done (`src/keypad.ts`; keys are released on blur and when the page is hidden) and was checked in headless Chrome. Remaining: touch controls and automated frontend tests (the repository has no JS test runner yet).
+
 ### SAVE-01: Support cartridge backup storage
 
-**Status:** `BACKLOG`  
+**Status:** `IN PROGRESS`  
 **Priority:** `P1`  
 **Depends on:** ROM-01, BUS-01
 
@@ -210,6 +231,8 @@ Acceptance criteria:
 - Implement one save type at a time with focused read/write tests.
 - Persist saves locally using a versioned browser storage format and handle quota or corrupt-data errors.
 - Never modify the uploaded ROM bytes.
+
+SRAM and Flash (64/128 KiB) are detected from SDK library strings, emulated with Rust tests, and persisted per ROM hash in versioned IndexedDB records (see [WASM Boundary](doc/architecture/wasm-boundary.md)). A headless Chrome run confirmed a Flash save is stored and restored. Remaining: EEPROM.
 
 ## P2: Compatibility and fidelity
 

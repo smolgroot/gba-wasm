@@ -1,24 +1,41 @@
 # GPU Core
 
-The GPU core selects the display mode from `DISPCNT` and renders the bitmap modes (3, 4, and 5) from emulated VRAM and palette RAM into an RGBA framebuffer. It renders the whole frame at VBlank; mid-frame register changes are not visible.
+`GpuCore` (`rust/src/gpu.rs`) is a scanline renderer. It builds each visible line from emulated I/O registers, VRAM, palette RAM, and OAM into an RGBA framebuffer (`SCREEN_WIDTH * SCREEN_HEIGHT * 4` bytes, alpha always opaque). RGB555 channels are expanded to 8 bits.
 
-## Data structure
+## Frame timing
 
-The `GpuCore` stores a `framebuffer` as a flat RGBA array of length `SCREEN_WIDTH * SCREEN_HEIGHT * 4`.
+`GbaCore::step_frame` renders line N once the display reaches HBlank on line N, then returns the frame when VBlank starts. Register, VRAM, or palette changes made between lines (by HBlank interrupts or HBlank DMA) therefore affect the following lines, as on hardware. `GpuCore::render` renders all 160 lines from the current state and is used by the instruction-count demo runners.
 
-## Operations
+## Layers
 
-- `clear()` resets the framebuffer
-- `set_pixel(x, y, rgba)` writes an RGBA pixel into the framebuffer
-- `render(memory)` reads `DISPCNT`. Forced blank (bit 7) displays white. With BG2 enabled, Mode 3 shows 240 x 160 RGB555 pixels, Mode 4 shows 240 x 160 8-bit indices into the background palette, and Mode 5 shows a 160 x 128 RGB555 bitmap surrounded by the backdrop. Modes 4 and 5 use the frame selected by bit 4 (`0x06000000` or `0x0600A000`).
-- Otherwise the frame is filled with the backdrop color (palette entry 0). Tile modes 0-2, objects, windows, mosaic, and blending are not implemented yet, so frames from games using those modes show only the backdrop.
+| `DISPCNT` mode | Backgrounds |
+| --- | --- |
+| 0 | BG0-BG3 text |
+| 1 | BG0-BG1 text, BG2 affine |
+| 2 | BG2-BG3 affine |
+| 3, 4, 5 | BG2 bitmap: 240 x 160 RGB555, 240 x 160 8-bit paletted (index 0 transparent), or 160 x 128 RGB555 |
 
-Each 5-bit color channel is expanded to 8 bits, and output pixels receive a fully opaque alpha channel.
+- **Text backgrounds:** 256/512-pixel map sizes, 9-bit scroll offsets, 4bpp palette banks or 8bpp tiles, tile flips, and mosaic.
+- **Affine backgrounds:** 128-1024-pixel maps, wraparound, and the BG2/BG3 internal reference point. That point reloads from `BGxX`/`BGxY` at line 0 and on any write to those registers, and advances by `PB`/`PD` after each line. The bitmap modes are sampled through BG2's affine transform, so the BIOS identity parameters (`PA = PD = 0x100`) give the unscaled image. Modes 4 and 5 use the frame selected by `DISPCNT` bit 4.
+- **Objects:** all 12 shapes and sizes, 4bpp/8bpp, 1D/2D tile mapping, flips, affine and double-size objects, semi-transparent and OBJ-window objects, and mosaic. In bitmap modes, tiles below 512 are unavailable, as on hardware. When objects overlap, the lower OAM entry wins unless a later one has a strictly higher priority.
+- **Composition:** the top two opaque layers by priority are found per pixel. Objects draw above backgrounds of the same priority, lower BG numbers win ties, and the backdrop (palette entry 0) is always last. WIN0, WIN1, the OBJ window, and the outside region select the enabled layers and effects, with WIN0 taking precedence. `BLDCNT` alpha blending, brightness increase, and brightness decrease are applied with `BLDALPHA`/`BLDY` coefficients capped at 16. Semi-transparent objects alpha-blend with a second target regardless of the blend mode.
+- **Forced blank** (`DISPCNT` bit 7) displays white.
 
-## Browser integration
+## Not modeled
 
-The Rust core owns VRAM and display-control state. The browser receives only the resulting framebuffer bytes for canvas rendering.
+- Per-line object cycle limits and `DISPCNT` bit 5 (HBlank interval free)
+- Mosaic on affine and bitmap backgrounds
+- Mid-line register changes
+- Green swap
 
 ## Test coverage
 
-Unit tests cover RGB555 decoding, Mode 4 palette lookup and frame select, the Mode 5 bitmap area and backdrop, forced blank, and the backdrop fallback. An integration test boots the jsmolka/gba-tests ROMs through `step_frame` and checks that their Mode 4 "All tests passed" screen is rendered exactly, using pixel bounds and a frame hash.
+Unit tests cover:
+- the three bitmap modes, frame select, forced blank, and the backdrop fallback
+- text background scrolling, wrapping, flips, and palette banks
+- affine reference-point stepping and mid-frame reloads
+- layer and object priority
+- object size, flip, and disable flags
+- window masking, darkening, and alpha and brightness arithmetic
+
+`step_frame_renders_each_line_with_the_state_at_its_hblank` drives a repeating HBlank DMA raster effect through the frame loop. The jsmolka/gba-tests integration test checks a full Mode 4 frame by hash.

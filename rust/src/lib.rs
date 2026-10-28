@@ -1,16 +1,18 @@
+mod backup;
 mod bios;
 mod cartridge;
 mod cpu;
 mod gpu;
 mod memory;
 
+pub use backup::{BackupKind, BackupSizeMismatch};
 pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ExecutionState, MAX_FRAME_INSTRUCTIONS, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::{
-    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, DMA0_ADDR, IE_ADDR,
-    IF_ADDR, IME_ADDR, KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap, SCANLINES_PER_FRAME, TIMER0_ADDR,
-    VCOUNT_ADDR, VISIBLE_SCANLINES, WAITCNT_ADDR,
+    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, DMA0_ADDR,
+    HBLANK_START_CYCLE, IE_ADDR, IF_ADDR, IME_ADDR, KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap,
+    SCANLINES_PER_FRAME, TIMER0_ADDR, VCOUNT_ADDR, VISIBLE_SCANLINES, WAITCNT_ADDR,
 };
 
 use std::fmt;
@@ -91,12 +93,15 @@ impl GbaCore {
 
         // A frame ends when the display enters VBlank, after all 160 visible lines.
         let frame = self.memory.vblanks_started();
+        let mut next_line = 0;
         for _ in 0..MAX_FRAME_INSTRUCTIONS {
             self.cpu
                 .step_with_cycles(&mut self.memory)
                 .map_err(GbaError::Cpu)?;
-            if self.memory.vblanks_started() != frame {
-                return Ok(self.render_frame());
+            let entered_vblank = self.memory.vblanks_started() != frame;
+            self.render_finished_lines(&mut next_line, entered_vblank);
+            if entered_vblank {
+                return Ok(self.gpu.framebuffer.clone());
             }
         }
 
@@ -104,6 +109,25 @@ impl GbaCore {
             limit: MAX_FRAME_INSTRUCTIONS,
         }
         .into())
+    }
+
+    /// Renders each visible line once its HBlank has begun, so mid-frame register changes
+    /// (raster effects) appear on the lines they affect. `flush` renders any remaining lines.
+    fn render_finished_lines(&mut self, next_line: &mut usize, flush: bool) {
+        let cycle = self.memory.frame_cycle();
+        let in_visible_lines = cycle < VISIBLE_SCANLINES * CYCLES_PER_SCANLINE;
+        while *next_line < SCREEN_HEIGHT {
+            let line_finished =
+                cycle >= *next_line as u32 * CYCLES_PER_SCANLINE + HBLANK_START_CYCLE;
+            let ready = flush || (in_visible_lines && line_finished);
+            if !ready {
+                break;
+            }
+            let reference_writes = self.memory.take_affine_reference_writes();
+            self.gpu
+                .render_scanline(&self.memory, *next_line, reference_writes);
+            *next_line += 1;
+        }
     }
 
     pub fn render_frame(&mut self) -> Vec<u8> {
@@ -231,6 +255,48 @@ mod tests {
     }
 
     #[test]
+    fn step_frame_renders_each_line_with_the_state_at_its_hblank() {
+        let rom = cartridge::synthetic_rom(*b"RAST", [0xFE, 0xFF, 0xFF, 0xEA]); // B .
+        let mut core = GbaCore::new();
+        core.load_rom(&rom).unwrap();
+        core.step_frame().unwrap();
+
+        // During VBlank, start a repeating HBlank DMA that copies one color per line from an
+        // EWRAM table into the backdrop (palette entry 0), a common raster effect.
+        let table_color = |entry: u32| (entry * 0x0123 + 0x0101) as u16 & 0x7FFF;
+        for entry in 0..VISIBLE_SCANLINES {
+            core.memory
+                .write_u16(0x0200_0000 + entry * 2, table_color(entry));
+        }
+        core.memory.write_u16(0x0500_0000, 0x7FFF);
+        core.memory.write_u32(DMA0_ADDR, 0x0200_0000);
+        core.memory.write_u32(DMA0_ADDR + 4, 0x0500_0000);
+        core.memory.write_u16(DMA0_ADDR + 8, 1);
+        // Enable, HBlank timing, repeat, fixed destination.
+        core.memory
+            .write_u16(DMA0_ADDR + 10, (1 << 15) | (2 << 12) | (1 << 9) | (2 << 5));
+        let frame = core.step_frame().unwrap();
+
+        let rgb = |color: u16| {
+            let expand = |channel: u16| ((channel & 0x1F) << 3 | (channel & 0x1F) >> 2) as u8;
+            [expand(color), expand(color >> 5), expand(color >> 10)]
+        };
+        let line_color = |line: usize| &frame[line * SCREEN_WIDTH * 4..][..3];
+        assert_eq!(
+            line_color(0),
+            rgb(0x7FFF),
+            "line 0 renders before the first HBlank DMA"
+        );
+        for line in 1..SCREEN_HEIGHT {
+            assert_eq!(
+                line_color(line),
+                rgb(table_color(line as u32 - 1)),
+                "line {line}"
+            );
+        }
+    }
+
+    #[test]
     fn halted_cpu_wakes_on_the_exact_vblank_request() {
         let mut rom = cartridge::synthetic_rom(*b"HALT", [0x2E, 0x00, 0x00, 0xEA]);
         rom.resize(0xC0, 0);
@@ -319,6 +385,36 @@ impl WasmEmulator {
         self.core
             .step_frame()
             .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Detected backup type: `none`, `SRAM`, `FLASH512`, `FLASH1M`, or an unemulated type.
+    pub fn backup_type(&self) -> String {
+        self.core.memory.backup.kind().name().to_owned()
+    }
+
+    /// Current save data; empty when the cartridge has no emulated backup memory.
+    pub fn backup_data(&self) -> Vec<u8> {
+        self.core.memory.backup.data().to_vec()
+    }
+
+    /// Restores save data previously returned by `backup_data` for the same cartridge.
+    pub fn load_backup(&mut self, data: &[u8]) -> Result<(), JsValue> {
+        self.core
+            .memory
+            .backup
+            .load(data)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// True when save data changed since the last call.
+    pub fn take_backup_dirty(&mut self) -> bool {
+        self.core.memory.backup.take_dirty()
+    }
+
+    /// Sets the pressed buttons as a KEYINPUT bit mask (1 = pressed): A, B, Select, Start,
+    /// Right, Left, Up, Down, R, L.
+    pub fn set_pressed_keys(&mut self, pressed: u16) {
+        self.core.set_pressed_keys(pressed);
     }
 }
 

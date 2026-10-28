@@ -25,7 +25,7 @@ const DISPCNT_LOW_WRITABLE_MASK: u8 = 0xF7;
 const DISPSTAT_VBLANK: u8 = 1 << 0;
 const DISPSTAT_HBLANK: u8 = 1 << 1;
 const DISPSTAT_VCOUNT_MATCH: u8 = 1 << 2;
-const HBLANK_START_CYCLE: u32 = 1006;
+pub const HBLANK_START_CYCLE: u32 = 1006;
 const IRQ_TIMER0: u16 = 1 << 3;
 const IRQ_VBLANK: u16 = 1 << 0;
 const IRQ_HBLANK: u16 = 1 << 1;
@@ -45,6 +45,8 @@ const DMA_TIMING_HBLANK: u16 = 2;
 /// Fixed setup cost per transfer; each unit adds a read and a write cycle.
 const DMA_SETUP_CYCLES: u32 = 2;
 const KEYINPUT_MASK: u16 = 0x03FF;
+const BACKUP_START: u32 = 0x0E00_0000;
+const BACKUP_WINDOW_MASK: u32 = 0xFFFF;
 const DISPLAY_MODE_MASK: u8 = 0x07;
 const TILE_MODE_BG_VRAM_END: usize = 0x1_0000;
 const BITMAP_MODE_BG_VRAM_END: usize = 0x1_4000;
@@ -195,9 +197,12 @@ fn periodic_event_count(start: u32, elapsed: u64, event: u32, period: u32) -> u6
     }
 }
 
+use crate::backup::{Backup, BackupKind};
+
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
     pub bios: Vec<u8>,
+    pub backup: Backup,
     pub ewram: Vec<u8>,
     pub iwram: Vec<u8>,
     pub vram: Vec<u8>,
@@ -210,12 +215,14 @@ pub struct MemoryMap {
     pressed_keys: u16,
     timers: [Timer; 4],
     dma: [DmaChannel; 4],
+    affine_reference_writes: [bool; 2],
 }
 
 impl MemoryMap {
     pub fn new() -> Self {
-        Self {
+        let mut memory = Self {
             bios: crate::bios::hle_image(),
+            backup: Backup::new(BackupKind::None),
             ewram: vec![0; EWRAM_SIZE],
             iwram: vec![0; IWRAM_SIZE],
             vram: vec![0; VRAM_SIZE],
@@ -228,12 +235,18 @@ impl MemoryMap {
             pressed_keys: 0,
             timers: [Timer::default(); 4],
             dma: [DmaChannel::default(); 4],
-        }
+            affine_reference_writes: [false; 2],
+        };
+        memory.reset_io_registers();
+        memory
     }
 
+    /// Maps a cartridge image and creates empty backup memory of the type its SDK library
+    /// string declares.
     pub fn load_cartridge(&mut self, data: &[u8]) {
         self.cartridge.clear();
         self.cartridge.extend_from_slice(data);
+        self.backup = Backup::new(BackupKind::detect(data));
     }
 
     pub fn advance_video_cycles(&mut self, cycles: u32) {
@@ -289,10 +302,44 @@ impl MemoryMap {
         cycles.max(1)
     }
 
+    /// Clears I/O state to the values the BIOS leaves behind: all zero except the identity
+    /// scale (1.0 in 8.8 fixed point) in the BG2/BG3 affine `PA` and `PD` parameters.
     pub fn reset_io_registers(&mut self) {
-        self.io.fill(0);
-        self.timers = [Timer::default(); 4];
-        self.dma = [DmaChannel::default(); 4];
+        self.reset_io_groups(true, true, true);
+    }
+
+    /// `RegisterRamReset` register groups: serial (`0x120`-`0x15F`), sound (`0x060`-`0x0AF`),
+    /// and every other register, including display, DMA, timers, keypad, and interrupts.
+    pub fn reset_io_groups(&mut self, serial: bool, sound: bool, other: bool) {
+        for (offset, byte) in self.io.iter_mut().enumerate() {
+            let reset = match offset {
+                0x120..=0x15F => serial,
+                0x060..=0x0AF => sound,
+                _ => other,
+            };
+            if reset {
+                *byte = 0;
+            }
+        }
+        if other {
+            for offset in [0x020, 0x026, 0x030, 0x036] {
+                self.io[offset + 1] = 0x01;
+            }
+            self.timers = [Timer::default(); 4];
+            self.dma = [DmaChannel::default(); 4];
+            self.affine_reference_writes = [true; 2];
+        }
+    }
+
+    /// Position of the display in the current frame, in cycles from the start of scanline 0.
+    pub fn frame_cycle(&self) -> u32 {
+        self.video_cycles
+    }
+
+    /// Reports (and clears) whether the BG2/BG3 affine reference point registers were written
+    /// since the last call. Writes reload the PPU's internal reference point.
+    pub fn take_affine_reference_writes(&mut self) -> [bool; 2] {
+        std::mem::take(&mut self.affine_reference_writes)
     }
 
     pub fn set_pressed_keys(&mut self, pressed: u16) {
@@ -624,6 +671,10 @@ impl MemoryMap {
             0x208 => self.io[offset] = value & 1,
             0x100..=0x10F => unreachable!(),
             // Kept for the devices that consume them; readability is decided in `read_io`.
+            0x028..=0x02F | 0x038..=0x03F => {
+                self.io[offset] = value;
+                self.affine_reference_writes[(offset - 0x028) / 0x10] = true;
+            }
             _ => self.io[offset] = value,
         }
         if matches!(offset, 0x132 | 0x133)
@@ -647,6 +698,7 @@ impl MemoryMap {
                 let offset = (addr as usize) & 0x01FF_FFFF;
                 self.cartridge.get(offset).copied().unwrap_or(0xFF)
             }
+            BACKUP_START..=0x0FFF_FFFF => self.backup.read((addr & BACKUP_WINDOW_MASK) as usize),
             _ => 0,
         }
     }
@@ -702,11 +754,18 @@ impl MemoryMap {
                 self.oam[index] = value;
             }
             0x0800_0000..=0x0DFF_FFFF => {}
+            BACKUP_START..=0x0FFF_FFFF => self
+                .backup
+                .write((addr & BACKUP_WINDOW_MASK) as usize, value),
             _ => {}
         }
     }
 
     pub fn read_u16(&self, addr: u32) -> u16 {
+        // Backup memory has an 8-bit bus: wide reads repeat the addressed byte.
+        if addr >= BACKUP_START {
+            return u16::from(self.read_u8(addr)) * 0x0101;
+        }
         let aligned_addr = addr & !1;
         let lo = self.read_u8(aligned_addr) as u16;
         let hi = self.read_u8(aligned_addr.wrapping_add(1)) as u16;
@@ -714,18 +773,28 @@ impl MemoryMap {
     }
 
     pub fn read_u32(&self, addr: u32) -> u32 {
+        if addr >= BACKUP_START {
+            return u32::from(self.read_u8(addr)) * 0x0101_0101;
+        }
         let aligned_addr = addr & !3;
         u32::from(self.read_u16(aligned_addr))
             | (u32::from(self.read_u16(aligned_addr.wrapping_add(2))) << 16)
     }
 
     pub fn write_u16(&mut self, addr: u32, value: u16) {
+        // Backup memory has an 8-bit bus: only the byte lane of the address is stored.
+        if addr >= BACKUP_START {
+            return self.store_u8(addr, (value >> ((addr & 1) * 8)) as u8);
+        }
         let aligned_addr = addr & !1;
         self.store_u8(aligned_addr, (value & 0xFF) as u8);
         self.store_u8(aligned_addr.wrapping_add(1), (value >> 8) as u8);
     }
 
     pub fn write_u32(&mut self, addr: u32, value: u32) {
+        if addr >= BACKUP_START {
+            return self.store_u8(addr, (value >> ((addr & 3) * 8)) as u8);
+        }
         let aligned_addr = addr & !3;
         self.write_u16(aligned_addr, value as u16);
         self.write_u16(aligned_addr.wrapping_add(2), (value >> 16) as u16);
@@ -1017,6 +1086,30 @@ mod tests {
         memory.run_pending_dma();
         memory.advance_video_cycles(HBLANK_START_CYCLE + 1);
         assert_eq!(memory.run_pending_dma(), 0);
+    }
+
+    #[test]
+    fn cartridge_backup_is_detected_and_uses_an_8_bit_bus() {
+        let mut rom = vec![0; 0x200];
+        rom.extend_from_slice(b"SRAM_V113");
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+
+        memory.write_u32(0x0E00_0010, 0x1122_3344);
+        assert_eq!(
+            memory.read_u8(0x0E00_0010),
+            0x44,
+            "only the addressed lane is stored"
+        );
+        assert_eq!(memory.read_u8(0x0E00_0011), 0xFF);
+        assert_eq!(memory.read_u16(0x0E00_0010), 0x4444);
+        assert_eq!(memory.read_u32(0x0E00_0010), 0x4444_4444);
+        assert_eq!(
+            memory.read_u8(0x0F00_0010),
+            0x44,
+            "the 64 KiB window mirrors"
+        );
+        assert_eq!(memory.cartridge, rom, "ROM bytes are never modified");
     }
 
     #[test]

@@ -149,7 +149,9 @@ main { width: 100%; flex: 1; }
 .wide-button { width: 100%; }
 .keyboard-note { margin-top: 25px; padding-top: 19px; border-top: 1px solid #393d34; }
 .keyboard-note > span { display: block; margin-bottom: 12px; color: #787e71; font: 9px var(--mono); }
-.keyboard-note > div { display: flex; gap: 5px; flex-wrap: wrap; }
+.keyboard-note > div { display: flex; gap: 8px 12px; flex-wrap: wrap; }
+.keyboard-note .control { display: inline-flex; align-items: center; gap: 6px; }
+.keyboard-note .control small { color: #979d91; font: 9px var(--mono); }
 kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; background: #272a24; text-align: center; font: 9px var(--mono); }
 .emulator-disclaimer { max-width: 750px; margin: 17px 0 0; color: #777d71; font-size: 11px; line-height: 1.7; }
 .settings-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: #090a08aa; }

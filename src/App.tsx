@@ -3,14 +3,20 @@ import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, 
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
+import { hashRom, loadBackup, storeBackup } from './backupStorage'
+import { attachKeyboard } from './keypad'
 
-type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator }
+type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; romHash: string; backupType: string }
+type SaveFlushRef = { current: (() => void) | null }
 const DOCS_URL = '/gba-wasm/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
 const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
+const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT']]
+// Games write saves over several frames; persist once writes have stopped for this long.
+const SAVE_QUIET_FRAMES = 30
 
 type EmulatorSettings = {
   skipStartupSplash: boolean
@@ -97,6 +103,7 @@ function CartridgeMockup({ name }: { name: string }) {
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const emulatorRef = useRef<GbaWasmEmulator | null>(null)
+  const flushSaveRef = useRef<(() => void) | null>(null)
   const launchIdRef = useRef(0)
   const navigate = useNavigate()
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
@@ -124,8 +131,10 @@ function App() {
     void getSavedGames().then((games) => {
       if (mounted) setSavedGames(games)
     })
+    const flushSave = flushSaveRef
     return () => {
       mounted = false
+      flushSave.current?.()
       emulatorRef.current?.free()
       emulatorRef.current = null
     }
@@ -136,16 +145,32 @@ function App() {
     const info = wasm.inspect_rom(rom)
     const emulator = wasm.create_emulator(rom)
     let pixels: Uint8ClampedArray
+    let romHash: string
+    let saveStatus = ''
+    const backupType = emulator.backup_type()
     try {
+      romHash = await hashRom(rom)
+      if (emulator.backup_data().length > 0) {
+        try {
+          const stored = await loadBackup(romHash, backupType)
+          if (stored) {
+            emulator.load_backup(new Uint8Array(stored.data))
+            saveStatus = `, ${backupType} save loaded`
+          }
+        } catch (error) {
+          saveStatus = `, ${describeError(error).message}`
+        }
+      }
       pixels = emulator.step_frame()
     } catch (error) {
       emulator.free()
       throw error
     }
+    flushSaveRef.current?.()
     emulatorRef.current?.free()
     emulatorRef.current = emulator
-    const status = `${info}: ${hasVisibleVideo(pixels) ? 'running' : 'no video output yet'}`
-    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator })
+    const status = `${info}: ${hasVisibleVideo(pixels) ? 'running' : 'no video output yet'}${saveStatus}`
+    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator, romHash, backupType })
     setAppStatus(status)
     return pixels
   }
@@ -229,7 +254,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
-          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} />} />
+          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
         </Routes>
@@ -291,7 +316,7 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
   )
 }
 
-function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void }) {
+function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const blankFrameCountRef = useRef(0)
   const [hasVideo, setHasVideo] = useState(() => Boolean(game && hasVisibleVideo(game.pixels)))
@@ -306,6 +331,50 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     const timer = window.setTimeout(() => setShowStartupSplash(false), STARTUP_SPLASH_DURATION_MS)
     return () => window.clearTimeout(timer)
   }, [splashVisible])
+
+  useEffect(() => {
+    if (!game) return
+    return attachKeyboard(window, (pressed) => game.emulator.set_pressed_keys(pressed))
+  }, [game])
+
+  useEffect(() => {
+    if (!game || game.backupType === 'none') return
+    let savePending = false
+    let quietFrames = 0
+    const flushSave = () => {
+      if (!savePending) return
+      savePending = false
+      const data = game.emulator.backup_data()
+      void storeBackup(game.romHash, game.backupType, data).catch((error: unknown) => {
+        onRuntimeError(`Could not store save data: ${describeError(error).message}`)
+      })
+    }
+    const trackSaveWrites = () => {
+      if (game.emulator.take_backup_dirty()) {
+        savePending = true
+        quietFrames = 0
+      } else if (savePending && ++quietFrames >= SAVE_QUIET_FRAMES) {
+        flushSave()
+      }
+    }
+    const interval = window.setInterval(trackSaveWrites, GBA_FRAME_DURATION_MS)
+    const onPageHide = () => {
+      trackSaveWrites()
+      flushSave()
+    }
+    // Final flush; afterwards nothing touches this emulator, so App may free it.
+    const close = () => {
+      window.clearInterval(interval)
+      window.removeEventListener('pagehide', onPageHide)
+      onPageHide()
+      if (flushSaveRef.current === close) flushSaveRef.current = null
+    }
+    flushSaveRef.current = close
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      if (flushSaveRef.current === close) close()
+    }
+  }, [game, flushSaveRef, onRuntimeError])
 
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
@@ -377,10 +446,10 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
           <CartridgeMockup key={game.name} name={game.name} />
           <p>ROM loaded into the WebAssembly runtime.</p>
           <button className="secondary-button wide-button" onClick={onLoad}><ArrowDownToLine size={17} /> Replace ROM</button>
-          <div className="keyboard-note"><span>CONTROLS</span><div><kbd>Z</kbd><kbd>X</kbd><kbd>ENTER</kbd><kbd>SHIFT</kbd></div></div>
+          <div className="keyboard-note"><span>CONTROLS</span><div>{KEYBOARD_CONTROLS.map(([key, button]) => <span className="control" key={button}><kbd>{key}</kbd><small>{button}</small></span>)}</div></div>
         </aside>
       </div>
-      <p className="emulator-disclaimer">The emulator core is in early development. CPU, BIOS, timing, and GPU support remain incomplete, so most retail ROMs will not boot yet.</p>
+      <p className="emulator-disclaimer">The emulator core is in early development. Audio, EEPROM saves, and many BIOS services are not implemented, and accuracy varies by game.</p>
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>

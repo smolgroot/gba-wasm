@@ -1438,9 +1438,11 @@ impl ThumbCpu {
         if flags & (1 << 4) != 0 {
             memory.oam.fill(0);
         }
-        if flags & 0xE0 != 0 {
-            memory.reset_io_registers();
-        }
+        memory.reset_io_groups(
+            flags & (1 << 5) != 0,
+            flags & (1 << 6) != 0,
+            flags & (1 << 7) != 0,
+        );
     }
 
     fn cpu_set(&self, memory: &mut MemoryMap) {
@@ -1482,6 +1484,47 @@ impl ThumbCpu {
                 source = source.wrapping_add(4);
             }
             destination = destination.wrapping_add(4);
+        }
+    }
+
+    /// `BgAffineSet`: r2 entries of {texture center x/y (19.8), screen center x/y, scale x/y
+    /// (8.8), angle} at r0 become {PA, PB, PC, PD, reference X, reference Y} at r1.
+    fn bg_affine_set(&self, memory: &mut MemoryMap) {
+        let (mut source, mut destination) = (self.registers[0], self.registers[1]);
+        for _ in 0..self.registers[2] {
+            let half = |offset: u32| i32::from(memory.read_u16(source + offset) as i16);
+            let (texture_x, texture_y) = (
+                memory.read_u32(source) as i32,
+                memory.read_u32(source + 4) as i32,
+            );
+            let (screen_x, screen_y) = (half(8), half(10));
+            let [pa, pb, pc, pd] = affine_matrix(half(12), half(14), memory.read_u16(source + 16));
+            for (index, parameter) in [pa, pb, pc, pd].into_iter().enumerate() {
+                memory.write_u16(destination + index as u32 * 2, parameter as u16);
+            }
+            let reference_x = texture_x - (pa * screen_x + pb * screen_y);
+            let reference_y = texture_y - (pc * screen_x + pd * screen_y);
+            memory.write_u32(destination + 8, reference_x as u32);
+            memory.write_u32(destination + 12, reference_y as u32);
+            source = source.wrapping_add(20);
+            destination = destination.wrapping_add(16);
+        }
+    }
+
+    /// `ObjAffineSet`: r2 entries of {scale x/y (8.8), angle} at r0 become PA, PB, PC, PD at
+    /// r1, each r3 bytes apart (2 for a packed array, 8 to write into OAM).
+    fn obj_affine_set(&self, memory: &mut MemoryMap) {
+        let (mut source, mut destination) = (self.registers[0], self.registers[1]);
+        let stride = self.registers[3];
+        for _ in 0..self.registers[2] {
+            let scale_x = i32::from(memory.read_u16(source) as i16);
+            let scale_y = i32::from(memory.read_u16(source + 2) as i16);
+            let matrix = affine_matrix(scale_x, scale_y, memory.read_u16(source + 4));
+            for parameter in matrix {
+                memory.write_u16(destination, parameter as u16);
+                destination = destination.wrapping_add(stride);
+            }
+            source = source.wrapping_add(8);
         }
     }
 
@@ -1562,26 +1605,31 @@ impl ThumbCpu {
                 self.cpu_fast_set(memory);
                 Ok(())
             }
-            0x11 | 0x12 => {
-                let Some(data) = lz77_decompress(memory, self.registers[0]) else {
+            0x0E => {
+                self.bg_affine_set(memory);
+                Ok(())
+            }
+            0x0F => {
+                self.obj_affine_set(memory);
+                Ok(())
+            }
+            0x11..=0x15 => {
+                let source = self.registers[0];
+                let (data, unit_size) = match service {
+                    0x11 => (lz77_decompress(memory, source), 1),
+                    0x12 => (lz77_decompress(memory, source), 2),
+                    0x13 => (huffman_decompress(memory, source), 4),
+                    0x14 => (run_length_decompress(memory, source), 1),
+                    _ => (run_length_decompress(memory, source), 2),
+                };
+                let Some(data) = data else {
                     return Err(CpuError::UnsupportedBiosCall {
                         address,
                         state,
                         service,
                     });
                 };
-                let destination = self.registers[1];
-                if service == 0x11 {
-                    for (offset, byte) in data.iter().enumerate() {
-                        memory.write_u8(destination.wrapping_add(offset as u32), *byte);
-                    }
-                } else {
-                    // The VRAM variant writes whole halfwords; a trailing odd byte is not written.
-                    for (offset, pair) in data.chunks_exact(2).enumerate() {
-                        let value = u16::from_le_bytes([pair[0], pair[1]]);
-                        memory.write_u16(destination.wrapping_add(offset as u32 * 2), value);
-                    }
-                }
+                write_decompressed(memory, self.registers[1], &data, unit_size);
                 Ok(())
             }
             _ => Err(CpuError::UnsupportedBiosCall {
@@ -1756,13 +1804,95 @@ impl ThumbCpu {
     }
 }
 
-/// Decodes a BIOS LZ77 stream (header type 1). Returns `None` for other header types.
-fn lz77_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
+/// Writes decompressed data in the unit size of the BIOS variant: bytes for the WRAM
+/// variants, halfwords for VRAM, and words for Huffman. A trailing partial unit is dropped.
+fn write_decompressed(memory: &mut MemoryMap, destination: u32, data: &[u8], unit_size: usize) {
+    for (index, unit) in data.chunks_exact(unit_size).enumerate() {
+        let address = destination.wrapping_add((index * unit_size) as u32);
+        match unit {
+            [byte] => memory.write_u8(address, *byte),
+            [low, high] => memory.write_u16(address, u16::from_le_bytes([*low, *high])),
+            _ => memory.write_u32(address, u32::from_le_bytes(unit.try_into().unwrap())),
+        }
+    }
+}
+
+/// Reads a BIOS compression header: returns the decompressed size when the type matches.
+fn compression_header(memory: &MemoryMap, source: u32, kind: u32) -> Option<usize> {
     let header = memory.read_u32(source & !3);
-    if (header >> 4) & 0xF != 1 {
+    ((header >> 4) & 0xF == kind).then_some((header >> 8) as usize)
+}
+
+/// Decodes a BIOS Huffman stream (header type 2) with 4- or 8-bit data units.
+fn huffman_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
+    let size = compression_header(memory, source, 2)?;
+    let bits_per_unit = memory.read_u32(source & !3) & 0xF;
+    if bits_per_unit != 4 && bits_per_unit != 8 {
         return None;
     }
-    let size = (header >> 8) as usize;
+    let tree = (source & !3).wrapping_add(4);
+    let root = tree.wrapping_add(1);
+    let mut stream = tree.wrapping_add((u32::from(memory.read_u8(tree)) + 1) * 2);
+    let mut output = Vec::with_capacity(size + 3);
+    let (mut word, mut filled_bits) = (0u32, 0);
+    let mut node = root;
+
+    while output.len() < size {
+        let bits = memory.read_u32(stream);
+        stream = stream.wrapping_add(4);
+        for bit in (0..32).rev() {
+            // Node: bits 0-5 child offset, bit 7/6 set when child 0/1 is a data leaf.
+            let node_value = memory.read_u8(node);
+            let direction = (bits >> bit) & 1;
+            let child = (node & !1)
+                .wrapping_add(u32::from(node_value & 0x3F) * 2 + 2)
+                .wrapping_add(direction);
+            if node_value & (0x80 >> direction) == 0 {
+                node = child;
+                continue;
+            }
+            let mask = (1 << bits_per_unit) - 1;
+            word |= (u32::from(memory.read_u8(child)) & mask) << filled_bits;
+            filled_bits += bits_per_unit;
+            node = root;
+            if filled_bits == 32 {
+                output.extend_from_slice(&word.to_le_bytes());
+                (word, filled_bits) = (0, 0);
+                if output.len() >= size {
+                    break;
+                }
+            }
+        }
+    }
+    Some(output)
+}
+
+/// Decodes a BIOS run-length stream (header type 3).
+fn run_length_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
+    let size = compression_header(memory, source, 3)?;
+    let mut output = Vec::with_capacity(size);
+    let mut cursor = (source & !3).wrapping_add(4);
+    while output.len() < size {
+        let flag = memory.read_u8(cursor);
+        cursor = cursor.wrapping_add(1);
+        if flag & 0x80 != 0 {
+            let byte = memory.read_u8(cursor);
+            cursor = cursor.wrapping_add(1);
+            output.extend(std::iter::repeat_n(byte, usize::from(flag & 0x7F) + 3));
+        } else {
+            for _ in 0..=flag {
+                output.push(memory.read_u8(cursor));
+                cursor = cursor.wrapping_add(1);
+            }
+        }
+    }
+    output.truncate(size);
+    Some(output)
+}
+
+/// Decodes a BIOS LZ77 stream (header type 1). Returns `None` for other header types.
+fn lz77_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
+    let size = compression_header(memory, source, 1)?;
     let mut output = Vec::with_capacity(size);
     let mut cursor = (source & !3).wrapping_add(4);
     let mut next_byte = || {
@@ -1799,6 +1929,21 @@ fn lz77_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
         }
     }
     Some(output)
+}
+
+/// Rotation/scale matrix [PA, PB, PC, PD] in 8.8 fixed point. Only the top byte of the
+/// angle is used (256 steps per turn), with sine and cosine in 1.14 fixed point like the
+/// BIOS table; individual values may differ from the hardware table by one unit.
+fn affine_matrix(scale_x: i32, scale_y: i32, angle: u16) -> [i32; 4] {
+    let theta = f64::from(angle >> 8) * std::f64::consts::TAU / 256.0;
+    let sine = (theta.sin() * 16384.0).round() as i32;
+    let cosine = (theta.cos() * 16384.0).round() as i32;
+    [
+        (scale_x * cosine) >> 14,
+        (-scale_x * sine) >> 14,
+        (scale_y * sine) >> 14,
+        (scale_y * cosine) >> 14,
+    ]
 }
 
 fn integer_square_root(value: u32) -> u32 {
@@ -2321,7 +2466,11 @@ mod tests {
         assert!(memory.palette.iter().all(|byte| *byte == 0));
         assert!(memory.vram.iter().all(|byte| *byte == 0));
         assert_eq!(memory.oam[0], 0x33);
-        assert!(memory.io.iter().all(|byte| *byte == 0));
+        let mut expected_io = vec![0; memory.io.len()];
+        for offset in [0x021, 0x027, 0x031, 0x037] {
+            expected_io[offset] = 0x01; // BG2/BG3 affine PA and PD = 1.0
+        }
+        assert_eq!(memory.io, expected_io);
     }
 
     #[test]
@@ -2446,6 +2595,100 @@ mod tests {
     }
 
     #[test]
+    fn obj_affine_set_writes_scaled_rotation_matrices_with_a_stride() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF0F]));
+        // Entry 0: scale 1.0, angle 0. Entry 1: scale 2.0 x / 1.0 y, angle 90 degrees.
+        for (offset, value) in [
+            (0, 0x100),
+            (2, 0x100),
+            (4, 0),
+            (8, 0x200),
+            (10, 0x100),
+            (12, 0x4000),
+        ] {
+            memory.write_u16(0x0200_0000 + offset, value);
+        }
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0300_0000;
+        cpu.registers[2] = 2;
+        cpu.registers[3] = 8; // OAM layout
+
+        cpu.step(&mut memory).unwrap();
+
+        let parameter = |index: u32| memory.read_u16(0x0300_0000 + index * 8) as i16;
+        assert_eq!([0, 1, 2, 3].map(parameter), [0x100, 0, 0, 0x100]);
+        assert_eq!([4, 5, 6, 7].map(parameter), [0, -0x200, 0x100, 0]);
+    }
+
+    #[test]
+    fn bg_affine_set_derives_the_reference_point_from_both_centers() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF0E]));
+        memory.write_u32(0x0200_0000, 64 << 8); // texture center x
+        memory.write_u32(0x0200_0004, 32 << 8); // texture center y
+        memory.write_u16(0x0200_0008, 120); // screen center x
+        memory.write_u16(0x0200_000A, 80); // screen center y
+        memory.write_u16(0x0200_000C, 0x100); // scale x
+        memory.write_u16(0x0200_000E, 0x100); // scale y
+        memory.write_u16(0x0200_0010, 0); // angle
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 0x0300_0000;
+        cpu.registers[2] = 1;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u16(0x0300_0000), 0x100);
+        assert_eq!(memory.read_u16(0x0300_0006), 0x100);
+        assert_eq!(memory.read_u32(0x0300_0008) as i32, (64 - 120) << 8);
+        assert_eq!(memory.read_u32(0x0300_000C) as i32, (32 - 80) << 8);
+    }
+
+    #[test]
+    fn huffman_service_decodes_8_bit_units_into_words() {
+        // Tree: root with two leaves, 'A' for bit 0 and 'B' for bit 1.
+        let mut stream = vec![0x28, 0x04, 0x00, 0x00]; // type 2, 8-bit units, size 4
+        stream.extend([0x01, 0xC0, b'A', b'B']); // tree size byte, root node, leaves
+        stream.extend(0x6000_0000u32.to_le_bytes()); // bits 0,1,1,0 -> "ABBA"
+        let mut rom = program(&[0xDF13]);
+        rom.resize(0x20, 0);
+        rom.extend(stream);
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = ROM_BASE + 0x20;
+        cpu.registers[1] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(memory.read_u32(0x0200_0000), u32::from_le_bytes(*b"ABBA"));
+    }
+
+    #[test]
+    fn run_length_service_expands_runs_and_literals() {
+        let stream = [
+            0x30, 0x07, 0x00, 0x00, // type 3, size 7
+            0x81, b'Z', // run of 1 + 3 = 4 'Z'
+            0x02, b'a', b'b', b'c', // 2 + 1 = 3 literals
+        ];
+        let mut rom = program(&[0xDF14]);
+        rom.resize(0x20, 0);
+        rom.extend(stream);
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = ROM_BASE + 0x20;
+        cpu.registers[1] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+
+        let expanded: Vec<u8> = (0..7).map(|i| memory.read_u8(0x0200_0000 + i)).collect();
+        assert_eq!(&expanded, b"ZZZZabc");
+    }
+
+    #[test]
     fn thumb_vblank_intrwait_runs_the_game_irq_handler_and_returns_after_vblank() {
         let mut rom = program(&[0xDF05, 0x2001]); // VBlankIntrWait; MOVS r0, #1
         let mut memory = MemoryMap::new();
@@ -2529,7 +2772,7 @@ mod tests {
     #[test]
     fn unsupported_thumb_swi_is_reported_explicitly() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&program(&[0xDF0E])); // BgAffineSet
+        memory.load_cartridge(&program(&[0xDF1F])); // MidiKey2Freq
         let mut cpu = ThumbCpu::new(ROM_BASE);
 
         assert_eq!(
@@ -2537,10 +2780,35 @@ mod tests {
             Err(CpuError::UnsupportedBiosCall {
                 address: ROM_BASE,
                 state: ExecutionState::Thumb,
-                service: 0x0E,
+                service: 0x1F,
             })
         );
         assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn register_ram_reset_clears_only_the_selected_register_groups() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF01, 0xDF01]));
+        memory.write_u16(crate::memory::DISPCNT_ADDR, 0x1900);
+        memory.write_u16(0x0400_0080, 0x1234); // SOUNDCNT_L
+        memory.write_u16(0x0400_0128, 0x5678); // SIOCNT
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = 1 << 5; // serial only
+
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.io[0x128..0x12A], [0, 0]);
+        assert_eq!(memory.read_u16(crate::memory::DISPCNT_ADDR), 0x1900);
+        assert_eq!(memory.io[0x080..0x082], [0x34, 0x12]);
+
+        cpu.registers[0] = 1 << 7; // other registers
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(memory.read_u16(crate::memory::DISPCNT_ADDR), 0);
+        assert_eq!(
+            memory.io[0x080..0x082],
+            [0x34, 0x12],
+            "sound is a separate group"
+        );
     }
 
     #[test]

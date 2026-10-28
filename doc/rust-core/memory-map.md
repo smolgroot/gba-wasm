@@ -21,7 +21,20 @@ The first milestone defines the addressable memory layout used by the emulator c
 
 Video memory has a 16-bit bus. A byte store to palette RAM, or to background VRAM (`0x06000000`-`0x0600FFFF` in tile modes, up to `0x06013FFF` in bitmap modes 3-5), writes the byte to both halves of the halfword. Byte stores to OBJ VRAM and OAM are ignored.
 
-Each cartridge ROM window (`0x08000000`, `0x0A000000`, `0x0C000000`) maps the loaded image at offset zero, and reads past the image return `0xFF`. Images are limited to 32 MiB. ROM writes are ignored. Backup RAM, cartridge wait states, BIOS read protection, and open-bus values are not modeled. Unmapped addresses read `0`, which is an approximation.
+Each cartridge ROM window (`0x08000000`, `0x0A000000`, `0x0C000000`) maps the loaded image at offset zero, and reads past the image return `0xFF`. Images are limited to 32 MiB. ROM writes are ignored, and the ROM bytes are never modified. Cartridge wait states, BIOS read protection, and open-bus values are not modeled. Unmapped addresses read `0`, which is an approximation.
+
+## Cartridge backup
+
+Backup memory is mapped at `0x0E000000`-`0x0FFFFFFF` with a 64 KiB window (`rust/src/backup.rs`). The type comes from the library ID string the Nintendo SDK embeds in the ROM:
+
+| String | Type | Size |
+| --- | --- | --- |
+| `SRAM_V`, `SRAM_F_V` | SRAM | 32 KiB |
+| `FLASH_V`, `FLASH512_V` | Flash (reports Panasonic ID `0x1B32`) | 64 KiB |
+| `FLASH1M_V` | Flash (reports Sanyo ID `0x1362`), two 64 KiB banks | 128 KiB |
+| `EEPROM_V` | EEPROM, not emulated | none |
+
+Flash implements the `0xAA`/`0x55` unlock sequence and these commands: ID mode, chip erase, 4 KiB sector erase, byte program (which can only clear bits), and bank select. Commands complete instantly. The backup bus is 8 bits wide: halfword and word reads repeat the addressed byte, and wide writes store only the addressed byte lane. EEPROM and absent backup read `0xFF`. `Backup::take_dirty` reports changes so the browser can persist them (see [WASM Boundary](../architecture/wasm-boundary.md)).
 
 ## I/O registers
 
@@ -32,6 +45,7 @@ The I/O window is `0x04000000`-`0x040003FF`.
 - **Keypad:** `KEYINPUT` exposes ten active-low buttons driven by `set_pressed_keys`. `KEYCNT` implements OR/AND interrupt conditions.
 - **Timers 0-3:** reload/counter, 1/64/256/1024 prescalers, cascade, and overflow interrupts.
 - **DMA 0-3:** see below.
+- **Reset groups:** `reset_io_groups` clears the `RegisterRamReset` groups independently: serial (`0x120`-`0x15F`), sound (`0x060`-`0x0AF`), and all other registers. Resetting the last group restores the BG2/BG3 identity affine parameters left by the BIOS.
 - **Other registers:** all other writes are stored for the devices that consume them. `BGxCNT`, `WININ`/`WINOUT`, `BLDCNT`, `BLDALPHA`, the DMA control halfwords, and `POSTFLG` read back through their documented masks. Write-only and unimplemented registers read `0`, which is an approximation rather than open-bus emulation.
 
 ## DMA
