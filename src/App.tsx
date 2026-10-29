@@ -733,12 +733,12 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         <aside className="emulator-aside">{cartridgeDetails}</aside>
       </div>
       {/* <p className="emulator-disclaimer">The emulator core is in early development. Audio, EEPROM saves, and many BIOS services are not implemented, and accuracy varies by game.</p> */}
-      {/* {showDetails && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowDetails(false)}>
+      {showDetails && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowDetails(false)}>
         <section className="settings-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">CARTRIDGE</p><h2 id="details-title">Details</h2></div><button className="modal-close" onClick={() => setShowDetails(false)} aria-label="Close details"><X size={18} /></button></div>
           {cartridgeDetails}
         </section>
-      </div>} */}
+      </div>}
       {toast && <div key={toast.id} className={`toast toast-${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'}>{toast.message}</div>}
       {showSaves && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSaves(false)}>
         <section className="settings-modal saves-modal" role="dialog" aria-modal="true" aria-labelledby="saves-title" onMouseDown={(event) => event.stopPropagation()}>
