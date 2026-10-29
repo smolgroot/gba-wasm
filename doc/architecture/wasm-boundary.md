@@ -14,7 +14,9 @@ The WebAssembly boundary keeps the browser app and the emulator core separate.
 
 ## Frame loop
 
-The emulator page runs at most one `step_frame` per `requestAnimationFrame` callback. Its deadline advances by exactly one GBA frame (280,896 cycles, about 16.74 ms) per frame run, with 2 ms of tolerance for timestamp jitter. Over time this gives 59.73 fps on 60 Hz and faster displays. After a stall of more than three frames, the deadline resynchronizes instead of catching up. While paused (Pause button or `P`), frames are not stepped, the core state is untouched, and the deadline restarts on resume. The run-state indicator shows LOADING, RUNNING, PAUSED, or ERROR.
+The emulator page steps frames from `requestAnimationFrame` callbacks against a deadline. The deadline advances by one GBA frame (280,896 cycles, about 16.74 ms) divided by the game speed for each frame run, with 2 ms of tolerance for timestamp jitter. The speed is chosen in Settings: Slow ×0.5, Normal ×1, or Fast ×2. A callback runs every frame that is due, up to four, and draws only the last one, so Normal averages 59.73 fps and Fast about 120 fps on a 60 Hz display. After a stall of more than three frames, the deadline resynchronizes instead of catching up. Audio is played at the same speed as the game, so its pitch rises at Fast and drops at Slow, like a tape played at another speed.
+
+The Sound setting is a mute toggle plus a volume slider (a `GainNode` after the worklet, ramped to avoid clicks). Speed, volume, and mute are saved with the other settings in `localStorage`. While paused (Pause button or `P`), frames are not stepped, the core state is untouched, and the deadline restarts on resume. The run-state indicator shows LOADING, RUNNING, PAUSED, or ERROR.
 
 ## Data flow
 

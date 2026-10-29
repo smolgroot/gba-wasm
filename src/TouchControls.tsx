@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { GBA_KEYS, dpadMaskForVector } from './keypad'
+import type { TouchTheme } from './touchThemes'
 
 const DPAD = 'dpad'
 
@@ -20,7 +21,7 @@ function maskAtPoint(x: number, y: number): number {
  * On-screen GBA buttons. Every pointer is tracked separately and re-hit-tested on move, so a
  * finger can slide between buttons (or across D-pad directions) without lifting.
  */
-export function TouchControls({ onChange }: { onChange: (pressed: number) => void }) {
+export function TouchControls({ theme, onChange }: { theme: TouchTheme; onChange: (pressed: number) => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange }, [onChange])
@@ -85,7 +86,7 @@ export function TouchControls({ onChange }: { onChange: (pressed: number) => voi
   }, [])
 
   return (
-    <div className="touch-controls" ref={rootRef} aria-hidden="true">
+    <div className="touch-controls" ref={rootRef} data-touch-theme={theme} aria-hidden="true">
       <div className="touch-shoulders"><span className="touch-shoulder" data-gba="L">L</span><span className="touch-shoulder" data-gba="R">R</span></div>
       <div className="touch-main">
         <div className="touch-dpad" data-gba={DPAD}><i className="touch-dpad-h" /><i className="touch-dpad-v" /></div>

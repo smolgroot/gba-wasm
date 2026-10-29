@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Info, Pause, Play, Settings, Trash2, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Info, Pause, Play, Rabbit, Settings, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 import { hashRom, loadBackup, storeBackup } from './backupStorage'
 import { attachKeyboard } from './keypad'
 import { TouchControls } from './TouchControls'
+import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; romHash: string; backupType: string }
@@ -16,6 +17,8 @@ const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20B
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 // Display refresh timestamps jitter; a frame due within this margin runs now.
 const FRAME_PACING_TOLERANCE_MS = 2
+// Upper bound on frames run per display refresh, so fast mode on a slow display cannot stall input.
+const MAX_FRAMES_PER_CALLBACK = 4
 const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
 const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT'], ['P', 'PAUSE']]
@@ -24,14 +27,44 @@ const SAVE_QUIET_FRAMES = 30
 // Keep in sync with the touch overlay media query in App.css.
 const TOUCH_LANDSCAPE_QUERY = '(orientation: landscape) and (pointer: coarse) and (max-height: 540px)'
 
+type GameSpeed = 'slow' | 'normal' | 'fast'
+
+const GAME_SPEED_MULTIPLIERS: Record<GameSpeed, number> = { slow: 0.5, normal: 1, fast: 2 }
+
 type EmulatorSettings = {
   skipStartupSplash: boolean
   sound: boolean
+  /** Output gain from 0 to 1. */
+  volume: number
+  speed: GameSpeed
   touchControls: boolean
+  touchTheme: TouchTheme
+}
+
+function isGameSpeed(value: unknown): value is GameSpeed {
+  return typeof value === 'string' && value in GAME_SPEED_MULTIPLIERS
 }
 
 // Touch controls default to on for phones and tablets, where there is usually no keyboard.
-const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches }
+const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm' }
+
+/** A running figure in the lucide icon style (lucide has no running-person icon). */
+function RunnerIcon({ size = 24, ...props }: LucideProps) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="14.5" cy="4" r="2" />
+      <path d="M13 7.5 10 13l3.5 2.5L12 21" />
+      <path d="m10 13-3 3H4" />
+      <path d="M7 9.5 10.5 7l3 2.5 3 1" />
+    </svg>
+  )
+}
+
+const GAME_SPEED_OPTIONS: { speed: GameSpeed; label: string; Icon: (props: LucideProps) => React.ReactNode }[] = [
+  { speed: 'slow', label: 'Slow', Icon: Turtle },
+  { speed: 'normal', label: 'Normal', Icon: RunnerIcon },
+  { speed: 'fast', label: 'Fast', Icon: Rabbit },
+]
 
 function readSettings(): EmulatorSettings {
   try {
@@ -43,7 +76,10 @@ function readSettings(): EmulatorSettings {
       return {
         skipStartupSplash: 'skipStartupSplash' in values ? Boolean(values.skipStartupSplash) : DEFAULT_SETTINGS.skipStartupSplash,
         sound: 'sound' in values ? Boolean(values.sound) : DEFAULT_SETTINGS.sound,
+        volume: typeof values.volume === 'number' && Number.isFinite(values.volume) ? Math.min(1, Math.max(0, values.volume)) : DEFAULT_SETTINGS.volume,
+        speed: isGameSpeed(values.speed) ? values.speed : DEFAULT_SETTINGS.speed,
         touchControls: 'touchControls' in values ? Boolean(values.touchControls) : DEFAULT_SETTINGS.touchControls,
+        touchTheme: isTouchTheme(values.touchTheme) ? values.touchTheme : DEFAULT_SETTINGS.touchTheme,
       }
     }
   } catch {
@@ -339,6 +375,9 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
   const pausedRef = useRef(false)
   const audioRef = useRef<AudioOutput | null>(null)
+  // Read by the frame loop and the audio setup, so changing them restarts neither.
+  const speedRef = useRef(settings.speed)
+  const volumeRef = useRef(settings.volume)
   const [paused, setPaused] = useState(false)
   const blankFrameCountRef = useRef(0)
   const [hasVideo, setHasVideo] = useState(() => Boolean(game && hasVisibleVideo(game.pixels)))
@@ -400,13 +439,24 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   }, [game, sendKeys])
 
   useEffect(() => {
+    speedRef.current = settings.speed
+    audioRef.current?.setPlaybackRate(GAME_SPEED_MULTIPLIERS[settings.speed])
+  }, [settings.speed])
+
+  useEffect(() => {
+    volumeRef.current = settings.volume
+    audioRef.current?.setVolume(settings.volume)
+  }, [settings.volume])
+
+  useEffect(() => {
     if (!game || !settings.sound) return
     let active = true
     let output: AudioOutput | null = null
-    void AudioOutput.create(game.emulator.audio_sample_rate()).then((created) => {
+    void AudioOutput.create(game.emulator.audio_sample_rate(), volumeRef.current).then((created) => {
       if (!active) return created.close()
       output = created
       audioRef.current = created
+      created.setPlaybackRate(GAME_SPEED_MULTIPLIERS[speedRef.current])
       created.resume()
     }).catch((error: unknown) => {
       if (active) onRuntimeError(`Audio unavailable: ${describeError(error).message}`)
@@ -476,12 +526,30 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       if (pausedRef.current) {
         // Resume on the next animation frame instead of catching up on paused time.
         nextFrameAt = null
-      } else if (nextFrameAt === null || timestamp >= nextFrameAt - FRAME_PACING_TOLERANCE_MS) {
+      } else {
+        const speed = speedRef.current
+        const frameDuration = GBA_FRAME_DURATION_MS / GAME_SPEED_MULTIPLIERS[speed]
+        nextFrameAt ??= timestamp
+        let pixels: Uint8ClampedArray | null = null
         try {
-          const pixels = game.emulator.step_frame()
-          // Always drain the core's buffer, even when sound is off.
-          const samples = game.emulator.take_audio_samples()
-          audioRef.current?.push(samples)
+          // Each frame advances the deadline by exactly one (speed-scaled) GBA frame, so the
+          // average rate is 59.73 fps times the speed; fast mode runs several frames per refresh.
+          for (let frames = 0; frames < MAX_FRAMES_PER_CALLBACK && timestamp >= nextFrameAt - FRAME_PACING_TOLERANCE_MS; frames += 1) {
+            pixels = game.emulator.step_frame()
+            // Always drain the core's buffer; the output plays it back at the game speed.
+            audioRef.current?.push(game.emulator.take_audio_samples())
+            nextFrameAt += frameDuration
+          }
+          // After a stall (background tab, slow device), resynchronize instead of catching up.
+          if (timestamp - nextFrameAt > frameDuration * 3) nextFrameAt = timestamp + frameDuration
+        } catch (error) {
+          running = false
+          const message = error instanceof Error ? error.message : String(error)
+          setRuntimeError(message)
+          onRuntimeError(message)
+          return
+        }
+        if (pixels) {
           context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
           if (hasVisibleVideo(pixels)) {
             blankFrameCountRef.current = 0
@@ -494,17 +562,6 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
               setNoVideoOutput(true)
             }
           }
-          // Advance the deadline by exactly one GBA frame so the average rate is 59.73 fps;
-          // restarting from `timestamp` would skip every other 60 Hz display refresh.
-          nextFrameAt = (nextFrameAt ?? timestamp) + GBA_FRAME_DURATION_MS
-          // After a stall (background tab, slow device), resynchronize instead of catching up.
-          if (timestamp - nextFrameAt > GBA_FRAME_DURATION_MS * 3) nextFrameAt = timestamp + GBA_FRAME_DURATION_MS
-        } catch (error) {
-          running = false
-          const message = error instanceof Error ? error.message : String(error)
-          setRuntimeError(message)
-          onRuntimeError(message)
-          return
         }
       }
       animationFrame = requestAnimationFrame(advanceFrame)
@@ -545,23 +602,52 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             {!splashVisible && runtimeError && <div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
             {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
-          {settings.touchControls && <TouchControls onChange={onTouchKeys} />}
+          {settings.touchControls && <TouchControls theme={settings.touchTheme} onChange={onTouchKeys} />}
         </div>
         <aside className="emulator-aside">{cartridgeDetails}</aside>
       </div>
-      <p className="emulator-disclaimer">The emulator core is in early development. Audio, EEPROM saves, and many BIOS services are not implemented, and accuracy varies by game.</p>
-      {showDetails && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowDetails(false)}>
+      {/* <p className="emulator-disclaimer">The emulator core is in early development. Audio, EEPROM saves, and many BIOS services are not implemented, and accuracy varies by game.</p> */}
+      {/* {showDetails && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowDetails(false)}>
         <section className="settings-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">CARTRIDGE</p><h2 id="details-title">Details</h2></div><button className="modal-close" onClick={() => setShowDetails(false)} aria-label="Close details"><X size={18} /></button></div>
           {cartridgeDetails}
         </section>
-      </div>}
+      </div>} */}
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
           <label className="setting-row"><span><strong>Skip startup splash</strong><small>Start directly on the game display.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
-          <label className="setting-row"><span><strong>Sound</strong><small>Play game audio. Audio starts after your first key press or click.</small></span><input type="checkbox" checked={settings.sound} onChange={(event) => onSettingsChange({ ...settings, sound: event.target.checked })} /></label>
+          <div className="setting-row setting-column">
+            <span id="speed-label"><strong>Game speed</strong><small>Sound plays at the same speed, so its pitch follows.</small></span>
+            <div className="speed-options" role="radiogroup" aria-labelledby="speed-label">
+              {GAME_SPEED_OPTIONS.map(({ speed, label, Icon }) => (
+                <button key={speed} type="button" role="radio" aria-checked={settings.speed === speed} className={settings.speed === speed ? 'speed-option active' : 'speed-option'} onClick={() => onSettingsChange({ ...settings, speed })}>
+                  <Icon size={22} aria-hidden="true" /><span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="setting-row setting-column">
+            <span id="sound-label"><strong>Sound</strong><small>Audio starts after your first key press or click.</small></span>
+            <div className="sound-controls">
+              <button type="button" className="sound-toggle" aria-pressed={!settings.sound} aria-label={settings.sound ? 'Mute' : 'Unmute'} title={settings.sound ? 'Mute' : 'Unmute'} onClick={() => onSettingsChange({ ...settings, sound: !settings.sound })}>
+                {settings.sound && settings.volume > 0 ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              </button>
+              <input type="range" min={0} max={100} step={1} aria-labelledby="sound-label" aria-valuetext={`${Math.round(settings.volume * 100)}%`} value={Math.round(settings.volume * 100)} disabled={!settings.sound} onChange={(event) => onSettingsChange({ ...settings, volume: Number(event.target.value) / 100 })} />
+              <output>{settings.sound ? `${Math.round(settings.volume * 100)}%` : 'Off'}</output>
+            </div>
+          </div>
           <label className="setting-row"><span><strong>Touch controls</strong><small>Show on-screen GBA buttons below the game.</small></span><input type="checkbox" checked={settings.touchControls} onChange={(event) => onSettingsChange({ ...settings, touchControls: event.target.checked })} /></label>
+          <div className="setting-row setting-column">
+            <span id="touch-theme-label"><strong>Theme</strong><small>Colours of the mobile touch controls.</small></span>
+            <div className="touch-theme-options" role="radiogroup" aria-labelledby="touch-theme-label">
+              {TOUCH_THEMES.map(({ id, label }) => (
+                <button key={id} type="button" role="radio" aria-checked={settings.touchTheme === id} className={settings.touchTheme === id ? 'speed-option active' : 'speed-option'} onClick={() => onSettingsChange({ ...settings, touchTheme: id })}>
+                  <span className="touch-theme-swatch" data-touch-theme={id} aria-hidden="true"><i /><b /></span><span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <p className="settings-note">The GBA-WASM splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
         </section>
       </div>}
