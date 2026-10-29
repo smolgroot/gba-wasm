@@ -113,9 +113,11 @@ main { width: 100%; flex: 1; }
 .empty-emulator > small { margin-top: 22px; color: #7e8477; font: 10px var(--mono); }
 .rom-error-log { width: min(100%, 680px); max-height: 240px; overflow: auto; margin: 22px 0 32px; padding: 15px 17px; border: 1px solid #704b43; background: #171411; color: #e0b5a8; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.65 var(--mono); }
 .emulator-page { padding: 48px 0 72px; }
-.emulator-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.emulator-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
 .emulator-heading-actions { display: flex; align-items: center; gap: 10px; }
-.emulator-heading h1 { max-width: 65vw; overflow-wrap: anywhere; }
+/* Long ROM names stay on one line and are cut with an ellipsis; the full name is in the tooltip. */
+.emulator-title { flex: 1; min-width: 0; }
+.emulator-heading h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .emulator-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; align-items: start; }
 .screen-well { position: relative; }
 .screen-well canvas { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; image-rendering: pixelated; background: #090b08; }
@@ -136,11 +138,16 @@ main { width: 100%; flex: 1; }
 .touch-shoulders, .touch-main, .touch-system { display: flex; align-items: center; justify-content: space-between; }
 .touch-system { justify-content: center; gap: 22px; }
 .touch-shoulder { width: min(30%, 120px); height: 36px; border: 1px solid var(--touch-border); border-radius: 18px 18px 6px 6px; background: var(--touch-surface); }
-.touch-dpad { position: relative; width: clamp(120px, 38vw, 150px); aspect-ratio: 1; }
-.touch-dpad i { position: absolute; border-radius: 6px; background: var(--touch-surface); box-shadow: inset 0 0 0 1px var(--touch-border), 0 4px 0 var(--touch-depth); pointer-events: none; }
+.touch-dpad { position: relative; isolation: isolate; width: clamp(120px, 38vw, 150px); aspect-ratio: 1; }
+.touch-dpad i { position: absolute; pointer-events: none; }
+/* Both bars' outlines (::before) sit below both fills (::after), so the cross reads as one outlined shape. */
+.touch-dpad i::before, .touch-dpad i::after { content: ""; position: absolute; border-radius: 6px; }
+.touch-dpad i::before { inset: 0; z-index: 0; background: var(--touch-border); box-shadow: 0 4px 0 var(--touch-depth); }
+.touch-dpad i::after { inset: 1px; z-index: 1; border-radius: 5px; background: var(--touch-surface); }
 .touch-dpad-h { inset: 33% 0; }
 .touch-dpad-v { inset: 0 33%; }
-.touch-dpad.is-pressed i { filter: brightness(1.2); }
+/* Filtered on the container: a filter on a bar would isolate its layers and bring back the overlap lines. */
+.touch-dpad.is-pressed { filter: brightness(1.2); }
 .touch-face { position: relative; width: clamp(130px, 42vw, 168px); aspect-ratio: 1.15; }
 .touch-face-button { position: absolute; width: 46%; aspect-ratio: 1; border-radius: 50%; background: var(--touch-face); color: var(--touch-face-label) !important; font-size: 12px !important; box-shadow: 0 4px 0 var(--touch-face-depth); }
 .touch-a { top: 0; right: 0; }
@@ -148,12 +155,23 @@ main { width: 100%; flex: 1; }
 .touch-pill { min-width: 74px; height: 26px; padding: 0 12px; border: 1px solid var(--touch-border); border-radius: 13px; background: var(--touch-surface); font-size: 7px !important; }
 .touch-controls .is-pressed:not(.touch-dpad) { transform: translateY(3px); filter: brightness(1.2); box-shadow: none; }
 /* Touch control themes. The swatches in Settings reuse the same variables. */
-.touch-controls, .touch-theme-swatch { --touch-bg: #1a1d18; --touch-surface: #282b24; --touch-border: #4a4e43; --touch-depth: #0e100c; --touch-label: #c9cdc1; --touch-face: #bb8df2; --touch-face-label: #1a1420; --touch-face-depth: #5b3f7a; }
-[data-touch-theme="indigo"] { --touch-bg: #34327a; --touch-surface: #24224f; --touch-border: #5a58a8; --touch-depth: #15143a; --touch-label: #d8d7ff; --touch-face: #9c9ae0; --touch-face-label: #1d1c48; --touch-face-depth: #4b4996; }
-[data-touch-theme="pikachu"] { --touch-bg: #f2cf3a; --touch-surface: #2d2a22; --touch-border: #b8960f; --touch-depth: #8a6f08; --touch-label: #f7e27a; --touch-face: #e2463a; --touch-face-label: #fff4ec; --touch-face-depth: #8e231b; }
-[data-touch-theme="emerald"] { --touch-bg: #0f4f3c; --touch-surface: #0a3528; --touch-border: #2b8a66; --touch-depth: #04201a; --touch-label: #c6f0dc; --touch-face: #3fd08f; --touch-face-label: #06291d; --touch-face-depth: #1d7552; }
-[data-touch-theme="fire-red"] { --touch-bg: #a8231c; --touch-surface: #4c100c; --touch-border: #d8574c; --touch-depth: #2e0806; --touch-label: #ffd8d2; --touch-face: #ff9540; --touch-face-label: #3a0f06; --touch-face-depth: #a3461a; }
-[data-touch-theme="hyrule"] { --touch-bg: #2d4528; --touch-surface: #3d2f1c; --touch-border: #8c7540; --touch-depth: #1e170c; --touch-label: #eed98c; --touch-face: #d6b23a; --touch-face-label: #2a1f08; --touch-face-depth: #7a6320; }
+.touch-controls, .touch-theme-swatch, .app-shell.touch-play { --touch-bg: #1a1d18; --touch-surface: #282b24; --touch-border: #4a4e43; --touch-depth: #0e100c; --touch-label: #c9cdc1; --touch-face: #bb8df2; --touch-face-label: #1a1420; --touch-face-depth: #5b3f7a; --touch-ink: #e8e8e3; }
+[data-touch-theme="indigo"] { --touch-bg: #34327a; --touch-surface: #24224f; --touch-border: #5a58a8; --touch-depth: #15143a; --touch-label: #d8d7ff; --touch-face: #9c9ae0; --touch-face-label: #1d1c48; --touch-face-depth: #4b4996; --touch-ink: #ecebff; }
+[data-touch-theme="pikachu"] { --touch-bg: #f2cf3a; --touch-surface: #2d2a22; --touch-border: #b8960f; --touch-depth: #8a6f08; --touch-label: #f7e27a; --touch-face: #e2463a; --touch-face-label: #fff4ec; --touch-face-depth: #8e231b; --touch-ink: #2d2a22; }
+[data-touch-theme="emerald"] { --touch-bg: #0f4f3c; --touch-surface: #0a3528; --touch-border: #2b8a66; --touch-depth: #04201a; --touch-label: #c6f0dc; --touch-face: #3fd08f; --touch-face-label: #06291d; --touch-face-depth: #1d7552; --touch-ink: #dff7ec; }
+[data-touch-theme="fire-red"] { --touch-bg: #a8231c; --touch-surface: #4c100c; --touch-border: #d8574c; --touch-depth: #2e0806; --touch-label: #ffd8d2; --touch-face: #ff9540; --touch-face-label: #3a0f06; --touch-face-depth: #a3461a; --touch-ink: #fff0ec; }
+[data-touch-theme="hyrule"] { --touch-bg: #2d4528; --touch-surface: #3d2f1c; --touch-border: #8c7540; --touch-depth: #1e170c; --touch-label: #eed98c; --touch-face: #d6b23a; --touch-face-label: #2a1f08; --touch-face-depth: #7a6320; --touch-ink: #f3e7b8; }
+[data-touch-theme="oled-silver"] { --touch-bg: #000; --touch-surface: #b9bcc2; --touch-border: #e4e6ea; --touch-depth: #55585e; --touch-label: #1c1d20; --touch-face: #d6d8dc; --touch-face-label: #1c1d20; --touch-face-depth: #6b6e74; --touch-ink: #e4e6ea; }
+/* OLED Silver: brushed chrome with an iridescent sheen instead of flat fills. */
+[data-touch-theme="oled-silver"] { --touch-chrome: linear-gradient(135deg, #f7f8fa 0%, #aeb2b9 28%, #eceef1 48%, #8e929a 70%, #d9dce0 100%); --touch-holo: linear-gradient(120deg, #ff9ee455, #9ee8ff44 45%, #d2ff9e44); }
+/* Each bar's gradient is sized to the whole D-pad, so the two bars line up into one seamless cross. */
+[data-touch-theme="oled-silver"] .touch-dpad i::after { background: var(--touch-chrome) center / 100% 100% no-repeat; }
+[data-touch-theme="oled-silver"] .touch-dpad .touch-dpad-h::after { background-size: 100% 294%; }
+[data-touch-theme="oled-silver"] .touch-dpad .touch-dpad-v::after { background-size: 294% 100%; }
+[data-touch-theme="oled-silver"] .touch-shoulder, [data-touch-theme="oled-silver"] .touch-pill { background: linear-gradient(180deg, #fdfdfe, #b9bdc4 55%, #8a8e95); box-shadow: inset 0 1px 0 #fff, 0 3px 0 var(--touch-depth); text-shadow: 0 1px 0 #fff8; }
+[data-touch-theme="oled-silver"] .touch-face-button, [data-touch-theme="oled-silver"].touch-theme-swatch b { background: radial-gradient(circle at 32% 26%, #fff 0 9%, #fff0 32%), var(--touch-holo), conic-gradient(from 210deg, #c3c7cd, #f8f9fb, #9a9ea6, #e8eaee, #b0b4bb, #c3c7cd); }
+[data-touch-theme="oled-silver"] .touch-face-button { box-shadow: inset 0 -3px 6px #0004, 0 0 14px #c9e6ff33, 0 4px 0 var(--touch-face-depth); text-shadow: 0 1px 0 #fff9; }
+[data-touch-theme="oled-silver"].touch-theme-swatch i, [data-touch-theme="oled-silver"].touch-theme-swatch i::after { background: var(--touch-chrome); }
 .touch-theme-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .touch-theme-options .speed-option { min-height: 78px; padding: 8px 4px; text-align: center; font-size: 7px; }
 .touch-theme-swatch { position: relative; width: 52px; height: 30px; border: 1px solid var(--touch-border); border-radius: 6px; background: var(--touch-bg); }
@@ -186,7 +204,9 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
 .settings-modal { width: min(100%, 430px); max-height: calc(100dvh - 48px); overflow-y: auto; padding: 23px; border: 1px solid #5b5363; background: #20221d; box-shadow: 0 24px 70px #000b; }
 .mobile-only { display: none !important; }
 .details-modal .settings-modal-heading { margin-bottom: 19px; }
-.settings-modal-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; padding-bottom: 19px; border-bottom: 1px solid #3b3f36; }
+/* Pinned while the modal body scrolls, so the close button stays reachable. The negative margins
+   let it span the modal's padding and cover content scrolling underneath. */
+.settings-modal-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: start; justify-content: space-between; gap: 18px; margin: -23px -23px 0; padding: 23px 23px 19px; border-bottom: 1px solid #3b3f36; background: #20221d; }
 .settings-modal h2 { margin: 10px 0 0; color: #eeefe9; font: 12px/1.7 var(--pixel); }
 .modal-close { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #4b4f45; background: transparent; color: #b9beb1; cursor: pointer; }
 .modal-close:hover { border-color: var(--violet); color: var(--violet-light); }
@@ -277,12 +297,29 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
   .emulator-heading-actions { gap: 7px; }
   .emulator-heading .secondary-button { min-height: 38px; padding-inline: 10px; font-size: 7px; }
   .emulator-heading-actions .secondary-button { width: 38px; padding: 0; }
-  .emulator-heading-actions .secondary-button { font-size: 0; }
+  /* The hidden label is still a flex item; without gap: 0 the icon sits half a gap off-centre. */
+  .emulator-heading-actions .secondary-button { gap: 0; font-size: 0; }
   .emulator-layout { grid-template-columns: 1fr; }
   .play-surface { margin-inline: -18px; }
   .touch-controls { padding-inline: 16px; }
   .emulator-aside { padding: 17px; }
   .keyboard-note { margin-top: 17px; }
+}
+
+/* Playing with touch controls: the chosen touch theme colours the whole page, in every layout. */
+.app-shell.touch-play { background: var(--touch-bg); color: var(--touch-ink); }
+.touch-play .brand, .touch-play .nav-link:not(.active), .touch-play .nav-icon-link, .touch-play .emulator-heading h1, .touch-play .site-footer, .touch-play .footer-dot, .touch-play .legal-disclaimer { color: var(--touch-ink); }
+.touch-play .site-footer, .touch-play .legal-disclaimer { opacity: .75; }
+.touch-play .site-header, .touch-play .site-footer, .touch-play .legal-disclaimer { border-color: var(--touch-border); }
+.touch-play .emulator-heading-actions .secondary-button { border-color: var(--touch-border); background: var(--touch-surface); color: var(--touch-label); }
+.touch-play .emulator-heading-actions .secondary-button[aria-pressed="true"] { border-color: var(--touch-face); color: var(--touch-face); }
+.touch-play[data-touch-theme="oled-silver"] .emulator-heading-actions .secondary-button { background: linear-gradient(180deg, #fdfdfe, #b9bdc4 55%, #8a8e95); box-shadow: inset 0 1px 0 #fff; }
+.touch-play[data-touch-theme="oled-silver"] .emulator-heading-actions .secondary-button[aria-pressed="true"] { border-color: #9ee8ff; color: #1c1d20; box-shadow: inset 0 1px 0 #fff, 0 0 10px #9ee8ff66; }
+
+/* Portrait touch screens of any size: one column, and the game spans the full viewport width. */
+@media (orientation: portrait) and (pointer: coarse) {
+  .emulator-layout { grid-template-columns: 1fr; }
+  .play-surface { width: 100vw; margin-inline: calc(50% - 50vw) 0; }
 }
 
 /* Phone landscape: the game fills the viewport height and the touch buttons float over it. */
@@ -296,14 +333,33 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
   .has-touch-controls .touch-controls [data-gba].is-pressed { opacity: .75; }
   .has-touch-controls .touch-shoulders { position: absolute; top: 12px; left: 16px; right: 16px; }
   .has-touch-controls .touch-shoulder { width: 110px; height: 34px; }
-  .has-touch-controls .touch-main { position: absolute; left: 22px; right: 22px; bottom: 48px; align-items: flex-end; }
+  /* Raised towards where thumbs rest when holding a phone sideways. */
+  .has-touch-controls .touch-main { position: absolute; left: max(22px, env(safe-area-inset-left)); right: max(22px, env(safe-area-inset-right)); bottom: clamp(64px, 24dvh, 120px); align-items: center; }
   .has-touch-controls .touch-dpad { width: min(140px, 38dvh); }
   .has-touch-controls .touch-face { width: min(150px, 40dvh); }
   .has-touch-controls .touch-system { position: absolute; left: 0; right: 0; bottom: 10px; }
 }
 
+/* Phone landscape with touch controls: no site header or footer, the game owns the page. */
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 540px) {
+  .touch-play .site-header, .touch-play .site-footer { display: none; }
+  .touch-play .emulator-page { padding-bottom: 0; }
+}
+
+/* Portrait touch screens with touch controls: full-height page in the touch theme, keeping only the action buttons. */
+@media (orientation: portrait) and (pointer: coarse) {
+  .app-shell.touch-play { height: 100dvh; min-height: 0; }
+  .touch-play .site-header, .touch-play .site-footer, .touch-play .emulator-title { display: none; }
+  .touch-play main { flex: 1; min-height: 0; }
+  .touch-play .emulator-page { height: 100%; display: flex; flex-direction: column; padding: max(10px, env(safe-area-inset-top)) 0 env(safe-area-inset-bottom); }
+  .touch-play .emulator-heading { justify-content: center; margin-bottom: 10px; }
+  .touch-play .emulator-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .touch-play .play-surface { flex: 1; display: flex; flex-direction: column; }
+  .touch-play .touch-controls { flex: 1; align-content: space-evenly; }
+}
+
 /* Mobile: the cartridge card moves into the Details dialog opened from the heading. */
-@media (max-width: 620px), (orientation: landscape) and (pointer: coarse) and (max-height: 540px) {
+@media (max-width: 620px), (orientation: portrait) and (pointer: coarse), (orientation: landscape) and (pointer: coarse) and (max-height: 540px) {
   .emulator-aside { display: none; }
   .mobile-only { display: inline-flex !important; }
 }

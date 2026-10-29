@@ -6,6 +6,7 @@ export const TOUCH_THEMES = [
   { id: 'emerald', label: 'Emerald' },
   { id: 'fire-red', label: 'Fire Red' },
   { id: 'hyrule', label: 'Hyrule' },
+  { id: 'oled-silver', label: 'OLED Silver' },
 ] as const
 
 export type TouchTheme = (typeof TOUCH_THEMES)[number]['id']

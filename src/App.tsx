@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Pause, Play, Rabbit, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
-import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
 import { hashRom, loadBackup, loadStates, STATE_SLOTS, storeBackup, storeState, validateSaveFile, type StoredState } from './backupStorage'
@@ -163,6 +163,7 @@ function App() {
   const flushSaveRef = useRef<(() => void) | null>(null)
   const launchIdRef = useRef(0)
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [savedGames, setSavedGames] = useState<SavedGame[]>([])
   const [appStatus, setAppStatus] = useState('Initializing WebAssembly')
@@ -310,8 +311,10 @@ function App() {
     navigate('/play')
     inputRef.current?.click()
   }
+  // While a game is played with touch controls, phones drop the site chrome (see `.touch-play` in App.css).
+  const touchPlay = Boolean(activeGame) && settings.touchControls && pathname === '/play'
   return (
-    <div className="app-shell">
+    <div className={touchPlay ? 'app-shell touch-play' : 'app-shell'} data-touch-theme={touchPlay ? settings.touchTheme : undefined}>
       <header className="site-header">
         <Link className="brand" to="/" aria-label="GBA-WASM home">
           <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><span>GBA<span className="brand-dash">-</span>WASM</span>
@@ -719,7 +722,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
 
   return (
     <section className="emulator-page">
-      <div className="emulator-heading"><div><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
+      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
         <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`} ref={playSurfaceRef}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
