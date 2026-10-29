@@ -133,12 +133,14 @@ main { width: 100%; flex: 1; }
 .startup-splash strong span { color: var(--violet); }
 .startup-splash small { color: #c5a9df; font: 10px var(--mono); }
 .secondary-button[aria-pressed="true"] { border-color: var(--violet); color: var(--violet-light); background: #29242f; }
-.touch-controls { display: grid; gap: 18px; padding: 16px 18px 24px; background: var(--touch-bg); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.touch-controls { display: grid; gap: 18px; overflow: clip; padding: 16px 18px 24px; background: var(--touch-bg); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .touch-controls [data-gba] { display: grid; place-items: center; color: var(--touch-label); font: 9px var(--pixel); transition: background .06s ease, transform .06s ease; }
 .touch-shoulders, .touch-main, .touch-system { display: flex; align-items: center; justify-content: space-between; }
 .touch-system { justify-content: center; gap: 22px; }
 .touch-shoulder { width: min(30%, 120px); height: 36px; border: 1px solid var(--touch-border); border-radius: 18px 18px 6px 6px; background: var(--touch-surface); }
 .touch-dpad { position: relative; isolation: isolate; width: clamp(120px, 38vw, 150px); aspect-ratio: 1; }
+/* Capture zone: a touch landing near the pad still grabs it (real buttons in the zone win, see TouchControls). */
+.touch-dpad::before { content: ""; position: absolute; inset: -30%; border-radius: 50%; }
 .touch-dpad i { position: absolute; pointer-events: none; }
 /* Both bars' outlines (::before) sit below both fills (::after), so the cross reads as one outlined shape. */
 .touch-dpad i::before, .touch-dpad i::after { content: ""; position: absolute; border-radius: 6px; }

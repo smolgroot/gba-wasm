@@ -41,6 +41,8 @@ type EmulatorSettings = {
   speed: GameSpeed
   touchControls: boolean
   touchTheme: TouchTheme
+  /** Vibrate (or play the iOS system haptic) when an on-screen button is pressed. */
+  haptics: boolean
 }
 
 function isGameSpeed(value: unknown): value is GameSpeed {
@@ -48,7 +50,7 @@ function isGameSpeed(value: unknown): value is GameSpeed {
 }
 
 // Touch controls default to on for phones and tablets, where there is usually no keyboard.
-const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm' }
+const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm', haptics: true }
 
 /** A running figure in the lucide icon style (lucide has no running-person icon). */
 function RunnerIcon({ size = 24, ...props }: LucideProps) {
@@ -82,6 +84,7 @@ function readSettings(): EmulatorSettings {
         speed: isGameSpeed(values.speed) ? values.speed : DEFAULT_SETTINGS.speed,
         touchControls: 'touchControls' in values ? Boolean(values.touchControls) : DEFAULT_SETTINGS.touchControls,
         touchTheme: isTouchTheme(values.touchTheme) ? values.touchTheme : DEFAULT_SETTINGS.touchTheme,
+        haptics: 'haptics' in values ? Boolean(values.haptics) : DEFAULT_SETTINGS.haptics,
       }
     }
   } catch {
@@ -731,7 +734,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             {!splashVisible && runtimeError && <div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
             {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
-          {settings.touchControls && <TouchControls theme={settings.touchTheme} onChange={onTouchKeys} />}
+          {settings.touchControls && <TouchControls theme={settings.touchTheme} haptics={settings.haptics} onChange={onTouchKeys} />}
         </div>
         <aside className="emulator-aside">{cartridgeDetails}</aside>
       </div>
@@ -804,6 +807,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             </div>
           </div>
           <label className="setting-row"><span><strong>Touch controls</strong><small>Show on-screen GBA buttons below the game.</small></span><input type="checkbox" checked={settings.touchControls} onChange={(event) => onSettingsChange({ ...settings, touchControls: event.target.checked })} /></label>
+          <label className="setting-row"><span><strong>Haptic feedback</strong><small>Feel a tick when you press an on-screen button.</small></span><input type="checkbox" checked={settings.haptics} onChange={(event) => onSettingsChange({ ...settings, haptics: event.target.checked })} /></label>
           <div className="setting-row setting-column">
             <span id="touch-theme-label"><strong>Theme</strong><small>Colours of the mobile touch controls.</small></span>
             <div className="touch-theme-options" role="radiogroup" aria-labelledby="touch-theme-label">

@@ -1,44 +1,79 @@
 import { useEffect, useRef } from 'react'
 import { GBA_KEYS, dpadMaskForVector } from './keypad'
 import type { TouchTheme } from './touchThemes'
+import { hapticTick } from './haptics'
 
 const DPAD = 'dpad'
+const DPAD_DIRECTIONS = GBA_KEYS.UP | GBA_KEYS.DOWN | GBA_KEYS.LEFT | GBA_KEYS.RIGHT
 
-/** Returns the buttons pressed by a touch at the given viewport point. */
-function maskAtPoint(x: number, y: number): number {
-  const target = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-gba]')
-  if (!target) return 0
-  const key = target.dataset.gba
-  if (key === DPAD) {
-    const rect = target.getBoundingClientRect()
-    const radius = rect.width / 2
-    return dpadMaskForVector((x - rect.left - radius) / radius, (y - rect.top - rect.height / 2) / radius)
+/** Centre and radius of the D-pad, captured when a finger grabs it so its tilt cannot shift the origin. */
+type Joystick = { x: number; y: number; radius: number }
+type TrackedPointer = { mask: number; joystick: Joystick | null }
+
+/**
+ * Returns the button under a viewport point. The D-pad has a capture zone around it (see
+ * `.touch-dpad::before`) that may overlap other buttons, so any real button there wins.
+ */
+function buttonAtPoint(x: number, y: number): HTMLElement | null {
+  let dpad: HTMLElement | null = null
+  for (const element of document.elementsFromPoint(x, y)) {
+    const target = element.closest<HTMLElement>('[data-gba]')
+    if (!target) continue
+    if (target.dataset.gba !== DPAD) return target
+    dpad ??= target
   }
-  return GBA_KEYS[key as keyof typeof GBA_KEYS] ?? 0
+  return dpad
+}
+
+function joystickFor(dpad: HTMLElement): Joystick {
+  const rect = dpad.getBoundingClientRect()
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, radius: rect.width / 2 }
+}
+
+/**
+ * Updates a pointer's pressed buttons. Once a finger reaches the D-pad it acts as a joystick for
+ * the rest of the touch: the direction follows the finger's angle from the pad's centre, even
+ * when it slides past the pad's edge.
+ */
+function updatePointer(pointer: TrackedPointer, x: number, y: number) {
+  if (!pointer.joystick) {
+    const target = buttonAtPoint(x, y)
+    if (target?.dataset.gba === DPAD) pointer.joystick = joystickFor(target)
+    else {
+      pointer.mask = GBA_KEYS[target?.dataset.gba as keyof typeof GBA_KEYS] ?? 0
+      return
+    }
+  }
+  const { joystick } = pointer
+  pointer.mask = dpadMaskForVector((x - joystick.x) / joystick.radius, (y - joystick.y) / joystick.radius)
 }
 
 /**
  * On-screen GBA buttons. Every pointer is tracked separately and re-hit-tested on move, so a
- * finger can slide between buttons (or across D-pad directions) without lifting.
+ * finger can slide between buttons without lifting, and steer the D-pad like a joystick.
  */
-export function TouchControls({ theme, onChange }: { theme: TouchTheme; onChange: (pressed: number) => void }) {
+export function TouchControls({ theme, haptics, onChange }: { theme: TouchTheme; haptics: boolean; onChange: (pressed: number) => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const onChangeRef = useRef(onChange)
+  const hapticsRef = useRef(haptics)
   useEffect(() => { onChangeRef.current = onChange }, [onChange])
+  useEffect(() => { hapticsRef.current = haptics }, [haptics])
 
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
-    const pointers = new Map<number, number>()
+    const pointers = new Map<number, TrackedPointer>()
     let reported = 0
     const report = () => {
-      const mask = [...pointers.values()].reduce((combined, bit) => combined | bit, 0)
+      const mask = [...pointers.values()].reduce((combined, pointer) => combined | pointer.mask, 0)
       if (mask === reported) return
-      if (mask & ~reported) navigator.vibrate?.(12)
+      const pressed = mask & ~reported
+      // A firm tick for a new press, a light one when a held D-pad only changes direction.
+      if (pressed && hapticsRef.current) hapticTick((pressed & ~DPAD_DIRECTIONS) !== 0 || (reported & DPAD_DIRECTIONS) === 0)
       reported = mask
       root.querySelectorAll<HTMLElement>('[data-gba]').forEach((element) => {
         const key = element.dataset.gba
-        const bits = key === DPAD ? GBA_KEYS.UP | GBA_KEYS.DOWN | GBA_KEYS.LEFT | GBA_KEYS.RIGHT : GBA_KEYS[key as keyof typeof GBA_KEYS]
+        const bits = key === DPAD ? DPAD_DIRECTIONS : GBA_KEYS[key as keyof typeof GBA_KEYS]
         element.classList.toggle('is-pressed', (mask & bits) !== 0)
         // Tilt the cross towards the held direction(s), like a physical rocker.
         if (key === DPAD) {
@@ -50,10 +85,14 @@ export function TouchControls({ theme, onChange }: { theme: TouchTheme; onChange
       onChangeRef.current(mask)
     }
     const track = (event: PointerEvent) => {
-      if (event.type === 'pointerdown') root.setPointerCapture(event.pointerId)
-      else if (!pointers.has(event.pointerId)) return
+      let pointer = pointers.get(event.pointerId)
+      if (event.type === 'pointerdown') {
+        root.setPointerCapture(event.pointerId)
+        pointer = { mask: 0, joystick: null }
+        pointers.set(event.pointerId, pointer)
+      } else if (!pointer) return
       event.preventDefault()
-      pointers.set(event.pointerId, maskAtPoint(event.clientX, event.clientY))
+      updatePointer(pointer, event.clientX, event.clientY)
       report()
     }
     const release = (event: PointerEvent) => {
