@@ -4,7 +4,7 @@
 
 1. Add or update a focused test in the Rust crate
 2. Implement the corresponding subsystem in the emulator core
-3. Run `cargo test` for the affected module
+3. Run `cargo test` for the affected module, or `pnpm test` for browser code
 4. Build the wasm output for the browser bridge
 5. Validate the app in the Vite dev environment
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
@@ -20,8 +20,9 @@ const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20B
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 // Display refresh timestamps jitter; a frame due within this margin runs now.
 const FRAME_PACING_TOLERANCE_MS = 2
-// Upper bound on frames run per display refresh, so fast mode on a slow display cannot stall input.
-const MAX_FRAMES_PER_CALLBACK = 4
+// Upper bound on frames run per display refresh, so super-fast mode on a slow display cannot stall input.
+// Leaves headroom above the 4 frames per 60 Hz refresh that super-fast mode needs.
+const MAX_FRAMES_PER_CALLBACK = 6
 const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
 const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT'], ['P', 'PAUSE']]
@@ -29,9 +30,9 @@ const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['
 const SAVE_QUIET_FRAMES = 30
 // Keep in sync with the touch overlay media query in App.css.
 
-type GameSpeed = 'slow' | 'normal' | 'fast'
+type GameSpeed = 'slow' | 'normal' | 'fast' | 'superFast'
 
-const GAME_SPEED_MULTIPLIERS: Record<GameSpeed, number> = { slow: 0.5, normal: 1, fast: 2 }
+const GAME_SPEED_MULTIPLIERS: Record<GameSpeed, number> = { slow: 0.5, normal: 1, fast: 2, superFast: 4 }
 
 type EmulatorSettings = {
   skipStartupSplash: boolean
@@ -68,6 +69,7 @@ const GAME_SPEED_OPTIONS: { speed: GameSpeed; label: string; Icon: (props: Lucid
   { speed: 'slow', label: 'Slow', Icon: Turtle },
   { speed: 'normal', label: 'Normal', Icon: RunnerIcon },
   { speed: 'fast', label: 'Fast', Icon: Rabbit },
+  { speed: 'superFast', label: 'Super', Icon: Rocket },
 ]
 
 function readSettings(): EmulatorSettings {

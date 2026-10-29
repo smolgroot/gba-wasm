@@ -21,10 +21,11 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 - `DONE` ARMv4T ARM/Thumb interpreter passing the jsmolka/gba-tests ARM, Thumb, and memory suites, with IRQ exception delivery through a generated HLE BIOS image. This is not a real BIOS implementation.
 - `DONE` Display status and VBlank/HBlank/VCount IRQs, timers, keypad interrupts, DMA (immediate/VBlank/HBlank), and VBlank-aligned frame stepping.
 - `DONE` Scanline PPU for all display modes, with objects, windows, and blending.
-- `DONE` SRAM, Flash, and EEPROM saves persisted in the browser; pause/resume; keyboard input.
+- `DONE` SRAM, Flash, and EEPROM saves persisted in the browser; pause/resume; keyboard and touch input.
 - `DONE` PSG and DirectSound audio streamed to the browser at 32,768 Hz.
+- `DONE` Robustness: seeded fuzz tests show random cartridge code, random I/O writes, and corrupted save states produce errors, never core panics (which abort the WASM instance). Frontend tests run with Vitest (`pnpm test`).
 
-Touch controls are in progress. Wait states, the prefetch buffer, serial/link hardware, and several BIOS services are not implemented.
+Wait states, the prefetch buffer, serial/link hardware, and several BIOS services are not implemented.
 
 ## Completed stories
 
@@ -209,7 +210,7 @@ Pause is a button and the `P` key. The frame loop runs at most one frame per ani
 
 ### INPUT-01: Map keyboard and touch controls
 
-**Status:** `IN PROGRESS`  
+**Status:** `DONE`  
 **Priority:** `P1`  
 **Depends on:** BUS-01
 
@@ -220,7 +221,7 @@ Acceptance criteria:
 - Focus loss and pointer cancellation cannot leave buttons stuck.
 - Add unit tests for input-bit mapping and browser interaction checks for touch controls.
 
-Keyboard input is done (`src/keypad.ts`; keys are released on blur and when the page is hidden) and was checked in headless Chrome. Remaining: touch controls and automated frontend tests (the repository has no JS test runner yet).
+Keyboard input (`src/keypad.ts`) was checked in headless Chrome. Vitest tests cover the KEYINPUT bit mapping, simultaneous keys, release on blur and page hide, the D-pad sectors, and the touch controls (`src/TouchControls.test.tsx`): multi-touch, sliding between buttons, the D-pad joystick, pointer cancellation, and release on blur, page hide, and unmount. The touch tests run in jsdom with a fixed stub layout, so real CSS hit areas are not covered.
 
 ### SAVE-01: Support cartridge backup storage
 
@@ -287,7 +288,7 @@ Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatch
 
 ### AUDIO-01: Implement GBA audio output
 
-**Status:** `IN PROGRESS`  
+**Status:** `DONE`  
 **Priority:** `P2`  
 **Depends on:** BUS-01, TIME-01
 
@@ -297,7 +298,7 @@ Acceptance criteria:
 - Mix samples at a documented rate and stream through browser audio without blocking emulation.
 - Test deterministic sample generation and audio lifecycle behavior.
 
-All four PSG channels and both DirectSound FIFOs, including sound DMA, are implemented and mixed at 32,768 Hz ([Audio](doc/rust-core/apu.md)). Rust tests cover sample generation. Remaining: automated tests of the browser audio lifecycle (start after a gesture, silence while paused, teardown), which were checked by hand in headless Chrome. The repository has no JS test runner yet.
+All four PSG channels and both DirectSound FIFOs, including sound DMA, are implemented and mixed at 32,768 Hz ([Audio](doc/rust-core/apu.md)). Rust tests cover sample generation. `src/audio.test.ts` runs the worklet processor directly (prebuffering, fade-out on underrun and while paused, the latency bound, playback rate, ring wrap) and checks the `AudioOutput` lifecycle against a fake Web Audio API (resume only while suspended, cleanup when the worklet fails to load, teardown). The App's gesture listeners were checked by hand in headless Chrome.
 
 ### COMPAT-01: Track a reproducible homebrew compatibility set
 
@@ -318,6 +319,6 @@ For each story:
 
 1. Change its status to `IN PROGRESS` and identify the focused test that will validate it.
 2. Implement the smallest coherent behavior slice and add tests alongside it.
-3. Run the relevant Rust tests or app checks, then the production build when the WASM boundary changes.
+3. Run the relevant Rust tests (`cargo test` in `rust/`) or frontend tests (`pnpm test`), then the production build when the WASM boundary changes.
 4. Update the story’s acceptance criteria/status and the relevant architecture docs in the same change.
 5. Mark `DONE` only when every acceptance criterion is verifiably met.

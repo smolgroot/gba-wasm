@@ -217,7 +217,7 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
 .setting-row strong { font-size: 13px; }
 .setting-row small { margin-top: 5px; color: #979d91; font-size: 11px; }
 .setting-column { flex-direction: column; align-items: stretch; cursor: default; }
-.speed-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.speed-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .speed-option { min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px solid #4a4e43; background: transparent; color: #b9beb1; cursor: pointer; font: 8px/1.6 var(--pixel); transition: border-color .18s ease, color .18s ease, background .18s ease; }
 .speed-option:hover { border-color: var(--violet); color: var(--violet-light); }
 .speed-option.active { border-color: var(--violet); background: #bb8df21f; color: var(--violet-light); }

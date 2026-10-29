@@ -21,6 +21,18 @@ Two generated fixtures in `rust/src/lib.rs` exercise the boot path. `generated_a
 
 `bios.gba` is not vendored. It checks values read from the real BIOS image, which an HLE BIOS cannot reproduce.
 
+## Robustness
+
+The release build aborts on panic, which kills the WASM instance, so hostile input must only ever produce errors. `rust/tests/robustness.rs` drives the core with seeded pseudo-random input: random code behind a valid header, random I/O and memory writes, and truncated or corrupted save states. Any panic fails the test with its seed. For a deeper search, scale the case counts and enable overflow checks:
+
+```sh
+GBA_FUZZ_SCALE=50 RUSTFLAGS="-C overflow-checks=on" cargo test --release --test robustness
+```
+
+## Frontend tests
+
+`pnpm test` runs Vitest in jsdom over `src/**/*.test.{ts,tsx}`: keyboard and touch input, and the audio worklet and output lifecycle.
+
 ## Commercial ROMs
 
 Commercial ROMs must never be added to the repository; `rom/` is git-ignored for local experiments. Passing tests do not imply that any commercial game boots.

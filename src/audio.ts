@@ -16,7 +16,8 @@ const LEVEL_SMOOTHING = 0.01
 // Per output frame: fades towards silence on underrun (~3 ms), since a jump to 0 clicks.
 const UNDERRUN_DECAY = 0.99
 
-const WORKLET_SOURCE = `
+// Exported for tests, which run the processor outside an AudioWorkletGlobalScope.
+export const WORKLET_SOURCE = `
 class GbaAudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super()
