@@ -4,6 +4,10 @@
 // PWAs) has no Vibration API, but since iOS 18 toggling a `<input type="checkbox" switch>` plays
 // the system haptic, so a hidden one is clicked instead. Both only fire during a user gesture,
 // so on iOS a tick plays when a finger lands, not when it slides onto another button.
+//
+// Chrome on Android passes the duration straight to the legacy one-shot vibrator at default
+// amplitude. The LRA in phones like the Pixel 8 needs ~20 ms to spin up, so shorter pulses are
+// dropped or imperceptible. Chrome also ignores vibrate() entirely while the ringer is on Silent.
 
 let iosSwitch: HTMLLabelElement | null = null
 
@@ -24,6 +28,6 @@ function clickIosSwitch() {
 
 /** Plays a short tick; `strong` for a new press, light for a D-pad direction change. */
 export function hapticTick(strong = true) {
-  if (typeof navigator.vibrate === 'function') navigator.vibrate(strong ? 14 : 8)
+  if (typeof navigator.vibrate === 'function') navigator.vibrate(strong ? 30 : 20)
   else clickIosSwitch()
 }

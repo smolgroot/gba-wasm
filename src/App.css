@@ -401,7 +401,20 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
 .toast { position: fixed; z-index: 20; right: 24px; bottom: 24px; max-width: min(420px, calc(100vw - 32px)); padding: 13px 17px; border: 1px solid var(--violet); background: #20221d; color: #eeefe9; box-shadow: 0 12px 40px #000a; font: 12px/1.6 var(--mono); animation: toast-in .18s ease-out; }
 .toast-error { border-color: #f08a7e; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.install-prompt { position: fixed; z-index: 19; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); width: min(520px, calc(100vw - 32px)); display: flex; align-items: center; gap: 14px; padding: 14px 12px 14px 16px; border: 1px solid var(--violet); background: var(--panel); color: #eeefe9; box-shadow: 0 12px 40px #000a; transform: translateX(-50%); animation: install-prompt-in .2s ease-out; }
+.install-prompt img { width: 44px; height: 44px; flex: none; border-radius: 10px; }
+.install-prompt-copy { flex: 1; min-width: 0; }
+.install-prompt-copy strong { display: block; margin-bottom: 6px; color: var(--violet-light); font: 9px/1.6 var(--pixel); }
+.install-prompt-copy p { margin: 0; color: var(--muted); font: 12px/1.6 var(--mono); }
+.install-prompt-copy p svg { vertical-align: -2px; color: var(--violet-light); }
+.install-prompt-copy b { color: #eeefe9; font-weight: 500; }
+.install-prompt .primary-button { flex: none; min-height: 38px; padding-inline: 14px; }
+.install-prompt-close { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border: 0; background: transparent; color: var(--quiet); cursor: pointer; }
+.install-prompt-close:hover { color: var(--violet-light); }
+@keyframes install-prompt-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @media (max-width: 560px) {
+  .install-prompt { bottom: calc(16px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+  .install-prompt .primary-button { order: 3; width: 100%; }
   .state-slot { grid-template-columns: 72px 1fr; }
   .state-slot img, .state-slot-empty { width: 72px; }
   .state-slot-actions { grid-column: 1 / -1; }

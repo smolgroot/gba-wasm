@@ -3,9 +3,18 @@
 
 // Buffering limits, in milliseconds of output. In input frames they scale with the playback
 // rate, so the latency stays the same at every game speed.
-const START_THRESHOLD = 2048 // ~60 ms at 1x queued before playback starts or restarts
-const MAX_BUFFERED = 6144 // ~190 ms at 1x; older audio is dropped beyond this
+const TARGET_BUFFERED = 3072 // ~94 ms at 1x queued before playback starts, and held there
+const MAX_BUFFERED = 8192 // ~250 ms at 1x; older audio is dropped beyond this
 const RING_CAPACITY = 32768 // one second of input at 1x, enough for 2x with headroom
+// The emulator is paced by the display clock and playback by the audio device's clock. They
+// drift apart, so playback is sped up or slowed down by at most this fraction (under 9 cents
+// of pitch) to keep the queue near its target instead of running dry or overflowing.
+const MAX_RATE_CORRECTION = 0.005
+// Per render quantum (128 frames, ~4 ms): smooths the queue level over ~0.4 s so the bursts
+// of one emulated frame at a time do not modulate the pitch.
+const LEVEL_SMOOTHING = 0.01
+// Per output frame: fades towards silence on underrun (~3 ms), since a jump to 0 clicks.
+const UNDERRUN_DECAY = 0.99
 
 const WORKLET_SOURCE = `
 class GbaAudioProcessor extends AudioWorkletProcessor {
@@ -17,6 +26,9 @@ class GbaAudioProcessor extends AudioWorkletProcessor {
     this.position = 0 // fractional input frame being played
     this.rate = 1 // input frames consumed per output frame (the game speed)
     this.playing = false
+    this.level = 0 // smoothed queue length in output frames
+    this.lastLeft = 0
+    this.lastRight = 0
     this.port.onmessage = ({ data }) => {
       if (!(data instanceof Float32Array)) {
         this.rate = data.rate
@@ -28,22 +40,33 @@ class GbaAudioProcessor extends AudioWorkletProcessor {
         this.right[slot] = data[index + 1]
         this.written += 1
       }
-      // Emulation running ahead of the device: skip the oldest audio to bound latency.
+      // Emulation running far ahead of the device: skip the oldest audio to bound latency.
       if (this.written - this.position > ${MAX_BUFFERED} * this.rate) {
-        this.position = this.written - ${START_THRESHOLD} * this.rate
+        this.position = this.written - ${TARGET_BUFFERED} * this.rate
+        this.level = ${TARGET_BUFFERED}
       }
     }
   }
 
   process(_inputs, outputs) {
     const [left, right] = outputs[0]
-    if (!this.playing && this.written - this.position >= ${START_THRESHOLD} * this.rate) this.playing = true
+    const queued = (this.written - this.position) / this.rate
+    if (!this.playing && queued >= ${TARGET_BUFFERED}) {
+      this.playing = true
+      this.level = queued
+    }
+    this.level += (queued - this.level) * ${LEVEL_SMOOTHING}
+    const error = this.level / ${TARGET_BUFFERED} - 1
+    const correction = Math.min(Math.max(error * ${MAX_RATE_CORRECTION}, -${MAX_RATE_CORRECTION}), ${MAX_RATE_CORRECTION})
+    const step = this.rate * (1 + correction)
     for (let index = 0; index < left.length; index += 1) {
       // Interpolation needs the frame after the current one.
       if (!this.playing || this.written - this.position < 2) {
-        // Underrun (paused or slow emulation): output silence and wait to refill.
-        left[index] = 0
-        right[index] = 0
+        // Underrun (paused or slow emulation): fade out and wait to refill.
+        this.lastLeft *= ${UNDERRUN_DECAY}
+        this.lastRight *= ${UNDERRUN_DECAY}
+        left[index] = this.lastLeft
+        right[index] = this.lastRight
         this.playing = false
         continue
       }
@@ -53,9 +76,11 @@ class GbaAudioProcessor extends AudioWorkletProcessor {
       const next = (frame + 1) % ${RING_CAPACITY}
       left[index] = this.left[current] + (this.left[next] - this.left[current]) * fraction
       right[index] = this.right[current] + (this.right[next] - this.right[current]) * fraction
+      this.lastLeft = left[index]
+      this.lastRight = right[index]
       // Consuming input faster or slower than real time changes tempo and pitch together,
       // like a tape played at another speed.
-      this.position += this.rate
+      this.position += step
     }
     return true
   }

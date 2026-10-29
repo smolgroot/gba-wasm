@@ -6,6 +6,7 @@ import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './save
 import { hashRom, loadBackup, loadStates, STATE_SLOTS, storeBackup, storeState, validateSaveFile, type StoredState } from './backupStorage'
 import { attachKeyboard } from './keypad'
 import { TouchControls } from './TouchControls'
+import { InstallPrompt } from './InstallPrompt'
 import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 
@@ -344,6 +345,8 @@ function App() {
         <span className="runtime-status"><i /> {appStatus}</span>
         <p className="legal-disclaimer">GBA-WASM is an open-source Game Boy Advance emulator. This project is not affiliated with Nintendo. Game Boy Advance is a registered trademark of Nintendo Co., Ltd.</p>
       </footer>
+      {/* Kept off the play screen so it never covers the game or the touch controls. */}
+      <InstallPrompt hidden={pathname === '/play'} />
     </div>
   )
 }
