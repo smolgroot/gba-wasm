@@ -13,7 +13,7 @@ A 512 Hz frame sequencer clocks length (256 Hz), sweep (128 Hz), and envelopes (
 
 ## Mixing
 
-Per side, the enabled PSG channels (each ±volume) are summed, scaled by the master volume (1-8) and the `SOUNDCNT_H` PSG ratio (25/50/100%). The enabled FIFO samples (signed 8-bit) are added at ×2 (50%) or ×4 (100%). The result is clamped to the 10-bit output range (±512) and widened to 16 bits. The DC bias level, `SOUNDBIAS` resolution, and analog filtering are not modeled.
+Per side, the enabled PSG channels (each ±volume) are summed, scaled by the master volume (1-8) and the `SOUNDCNT_H` PSG ratio (25/50/100%), so at full volume one channel spans about a quarter of the output range and one FIFO the full range, as on hardware. The enabled FIFO samples (signed 8-bit) are added at ×2 (50%) or ×4 (100%). The result is clamped to the 10-bit output range (±512) and widened to 16 bits. The DC bias level, `SOUNDBIAS` resolution, and analog filtering are not modeled.
 
 ## Approximations
 

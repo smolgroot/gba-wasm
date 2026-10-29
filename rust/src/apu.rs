@@ -562,8 +562,9 @@ impl Apu {
                 .map(|(_, output)| output)
                 .sum();
             let master_volume = i32::from((psg_control >> (side * 4)) & 7) + 1;
-            // Channels swing ±volume around 0, twice the hardware's 0..volume range.
-            *total = (psg * master_volume / 2) >> psg_shift;
+            // At full master volume and 100%, each channel spans about a quarter of the
+            // output range (±0x80 on hardware; ±volume * 8 = ±120 here).
+            *total = (psg * master_volume) >> psg_shift;
             for (fifo, volume_bit, enable_base) in [(0, 1 << 2, 8), (1, 1 << 3, 12)] {
                 if control & (1 << (enable_base + side)) != 0 {
                     let scale = if control & volume_bit != 0 { 4 } else { 2 };
@@ -616,7 +617,7 @@ mod tests {
         assert_eq!(highs, 16);
         assert!(
             left.iter()
-                .all(|sample| sample.unsigned_abs() == 15 * 8 / 2 * 64)
+                .all(|sample| sample.unsigned_abs() == 15 * 8 * 64)
         );
         assert_eq!(apu.status(), 0b10);
     }
