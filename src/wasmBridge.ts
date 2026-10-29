@@ -16,11 +16,15 @@ export type GbaWasmEmulator = {
   set_pressed_keys: (pressed: number) => void
   take_audio_samples: () => Int16Array
   audio_sample_rate: () => number
+  save_state: () => Uint8Array
+  load_state: (data: Uint8Array) => void
+  frame: () => Uint8ClampedArray
   free: () => void
 }
 
-type GeneratedWasmEmulator = Omit<GbaWasmEmulator, 'step_frame'> & {
+type GeneratedWasmEmulator = Omit<GbaWasmEmulator, 'step_frame' | 'frame'> & {
   step_frame: () => Uint8Array
+  frame: () => Uint8Array
 }
 
 type GeneratedWasmModule = {
@@ -66,6 +70,9 @@ export async function loadGbaWasm(): Promise<GbaWasmModule> {
         set_pressed_keys: (pressed: number) => emulator.set_pressed_keys(pressed),
         take_audio_samples: () => emulator.take_audio_samples(),
         audio_sample_rate: () => emulator.audio_sample_rate(),
+        save_state: () => emulator.save_state(),
+        load_state: (data: Uint8Array) => emulator.load_state(data),
+        frame: () => new Uint8ClampedArray(emulator.frame()),
         free: () => emulator.free(),
       }
     },

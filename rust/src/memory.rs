@@ -219,6 +219,26 @@ fn periodic_event_count(start: u32, elapsed: u64, event: u32, period: u32) -> u6
 
 use crate::apu::Apu;
 use crate::backup::{Backup, BackupKind};
+use crate::state::impl_state;
+
+impl_state!(Timer {
+    reload,
+    counter,
+    control,
+    prescaler_phase
+});
+impl_state!(DmaChannel {
+    source,
+    destination,
+    count,
+    pending
+});
+// The BIOS image and ROM are not state; held keys stay live; the volatile-read flag only
+// feeds the idle-loop detector.
+impl_state!(MemoryMap {
+    backup, apu, ewram, iwram, vram, oam, palette, io, video_cycles, vblanks_started, timers,
+    dma, affine_reference_writes,
+} skip { bios, cartridge, pressed_keys, volatile_read });
 
 #[derive(Debug, Clone)]
 pub struct MemoryMap {

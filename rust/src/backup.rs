@@ -3,6 +3,7 @@
 //! The type is detected from the library ID string the Nintendo SDK embeds in the ROM.
 //! SRAM, Flash (64 KiB and 128 KiB), and EEPROM (512 bytes and 8 KiB) are modeled.
 
+use crate::state::{State, StateError, StateReader, StateWriter, impl_state};
 use std::fmt;
 
 const SRAM_SIZE: usize = 32 * 1024;
@@ -123,6 +124,119 @@ impl EepromState {
             Some(position) => ((self.read_block >> (63 - (position - 4))) & 1) as u16,
             None => 1, // ready
         }
+    }
+}
+
+impl State for FlashCommand {
+    fn save(&self, writer: &mut StateWriter) {
+        (*self as u8).save(writer);
+    }
+
+    fn load(&mut self, reader: &mut StateReader) -> Result<(), StateError> {
+        let mut tag = 0u8;
+        tag.load(reader)?;
+        *self = match tag {
+            0 => Self::None,
+            1 => Self::Program,
+            2 => Self::SelectBank,
+            _ => return Err(StateError::Invalid("flash command")),
+        };
+        Ok(())
+    }
+}
+
+impl State for EepromPhase {
+    fn save(&self, writer: &mut StateWriter) {
+        let (tag, write) = match *self {
+            Self::Command => (0u8, false),
+            Self::Address { write } => (1, write),
+            Self::Data => (2, false),
+            Self::Stop { write } => (3, write),
+        };
+        tag.save(writer);
+        write.save(writer);
+    }
+
+    fn load(&mut self, reader: &mut StateReader) -> Result<(), StateError> {
+        let (mut tag, mut write) = (0u8, false);
+        tag.load(reader)?;
+        write.load(reader)?;
+        *self = match tag {
+            0 => Self::Command,
+            1 => Self::Address { write },
+            2 => Self::Data,
+            3 => Self::Stop { write },
+            _ => return Err(StateError::Invalid("EEPROM phase")),
+        };
+        Ok(())
+    }
+}
+
+impl_state!(EepromState {
+    address_bits,
+    phase,
+    shift,
+    count,
+    address,
+    data,
+    read_position,
+    read_block,
+});
+
+/// States carry the chip's command state but not its contents: loading a state never
+/// rolls back the game's save file.
+impl State for Backup {
+    fn save(&self, writer: &mut StateWriter) {
+        let Self {
+            kind,
+            data: _,
+            dirty: _,
+            unlock_stage,
+            id_mode,
+            erase_armed,
+            pending,
+            bank,
+            eeprom,
+        } = self;
+        (*kind as u8).save(writer);
+        unlock_stage.save(writer);
+        id_mode.save(writer);
+        erase_armed.save(writer);
+        pending.save(writer);
+        bank.save(writer);
+        eeprom.save(writer);
+    }
+
+    fn load(&mut self, reader: &mut StateReader) -> Result<(), StateError> {
+        let mut kind = 0u8;
+        kind.load(reader)?;
+        if kind != self.kind as u8 {
+            return Err(StateError::Invalid("backup type"));
+        }
+        self.unlock_stage.load(reader)?;
+        self.id_mode.load(reader)?;
+        self.erase_armed.load(reader)?;
+        self.pending.load(reader)?;
+        self.bank.load(reader)?;
+        self.eeprom.load(reader)?;
+        if self.bank > usize::from(self.kind == BackupKind::Flash128K) {
+            return Err(StateError::Invalid("flash bank"));
+        }
+        // A state taken after the EEPROM size was detected may be loaded into a session that
+        // has not detected it yet.
+        if let Some(address_bits) = self.eeprom.address_bits {
+            if !matches!(address_bits, 6 | 14) {
+                return Err(StateError::Invalid("EEPROM size"));
+            }
+            let size = (1 << address_bits.min(10)) * EEPROM_BLOCK_SIZE;
+            if self.data.len() != size {
+                self.data.resize(size, ERASED);
+            }
+            if self.eeprom.address >= size / EEPROM_BLOCK_SIZE {
+                return Err(StateError::Invalid("EEPROM address"));
+            }
+        }
+        Ok(())
     }
 }
 

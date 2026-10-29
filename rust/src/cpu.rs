@@ -1,5 +1,6 @@
 use crate::bios::IRQ_VECTOR;
 use crate::memory::{IME_ADDR, MemoryMap};
+use crate::state::{State, StateError, StateReader, StateWriter, impl_state};
 use std::fmt;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
@@ -97,13 +98,41 @@ impl fmt::Display for CpuError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum HaltState {
     /// `SWI Halt`: resume once any enabled interrupt is requested.
+    #[default]
     Halt,
     /// `SWI IntrWait`/`VBlankIntrWait`: after waking, re-run the SWI so it can
     /// check the BIOS interrupt flags written by the game's IRQ handler.
     IntrWait { swi_address: u32 },
+}
+
+impl State for HaltState {
+    fn save(&self, writer: &mut StateWriter) {
+        match self {
+            Self::Halt => 0u8.save(writer),
+            Self::IntrWait { swi_address } => {
+                1u8.save(writer);
+                swi_address.save(writer);
+            }
+        }
+    }
+
+    fn load(&mut self, reader: &mut StateReader) -> Result<(), StateError> {
+        let mut tag = 0u8;
+        tag.load(reader)?;
+        *self = match tag {
+            0 => Self::Halt,
+            1 => {
+                let mut swi_address = 0;
+                swi_address.load(reader)?;
+                Self::IntrWait { swi_address }
+            }
+            _ => return Err(StateError::Invalid("halt state")),
+        };
+        Ok(())
+    }
 }
 
 /// A short loop that may be spinning without side effects. Once two consecutive arrivals at
@@ -148,7 +177,17 @@ pub struct ThumbCpu {
     idle_loop: Option<IdleLoop>,
 }
 
+// The idle-loop detector is a cache of recent execution; it restarts empty after a load.
+impl_state!(ThumbCpu {
+    registers, cpsr, user_bank, fiq_bank, irq_bank, svc_bank, abort_bank, undefined_bank,
+    spsr_bank, halt, intr_wait_resumed,
+} skip { idle_loop });
+
 impl ThumbCpu {
+    pub(crate) fn clear_idle_loop(&mut self) {
+        self.idle_loop = None;
+    }
+
     pub fn new(entry: u32) -> Self {
         let mut registers = [0; 16];
         registers[15] = entry;

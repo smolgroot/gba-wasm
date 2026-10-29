@@ -5,6 +5,7 @@ mod cartridge;
 mod cpu;
 mod gpu;
 mod memory;
+mod state;
 
 pub use apu::SAMPLE_RATE as AUDIO_SAMPLE_RATE;
 pub use backup::{BackupKind, BackupSizeMismatch};
@@ -16,9 +17,15 @@ pub use memory::{
     HBLANK_START_CYCLE, IE_ADDR, IF_ADDR, IME_ADDR, KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap,
     SCANLINES_PER_FRAME, TIMER0_ADDR, VCOUNT_ADDR, VISIBLE_SCANLINES, WAITCNT_ADDR,
 };
+pub use state::StateError;
 
+use state::{State, StateReader, StateWriter};
 use std::fmt;
 use wasm_bindgen::prelude::*;
+
+const STATE_MAGIC: &[u8; 8] = b"GBAWSTAT";
+/// Bump when the serialized layout changes; older states are then rejected, not misread.
+const STATE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GbaError {
@@ -130,6 +137,53 @@ impl GbaCore {
                 .render_scanline(&self.memory, *next_line, reference_writes);
             *next_line += 1;
         }
+    }
+
+    /// Snapshots the whole machine except the ROM, the BIOS image, held keys, and the
+    /// contents of the cartridge save memory.
+    pub fn save_state(&self) -> Vec<u8> {
+        let mut writer = StateWriter::new();
+        writer.write_bytes(STATE_MAGIC);
+        STATE_VERSION.save(&mut writer);
+        state::fingerprint(&self.memory.cartridge).save(&mut writer);
+        self.cpu.save(&mut writer);
+        self.memory.save(&mut writer);
+        self.gpu.save(&mut writer);
+        writer.finish()
+    }
+
+    /// Restores a state from `save_state` for the loaded cartridge. On any error the core is
+    /// left unchanged.
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let mut reader = StateReader::new(data);
+        if reader.read_bytes(STATE_MAGIC.len()).ok() != Some(STATE_MAGIC.as_slice()) {
+            return Err(StateError::NotAState);
+        }
+        let mut version = 0u32;
+        version.load(&mut reader)?;
+        if version != STATE_VERSION {
+            return Err(StateError::UnsupportedVersion {
+                found: version,
+                supported: STATE_VERSION,
+            });
+        }
+        let mut fingerprint = 0u64;
+        fingerprint.load(&mut reader)?;
+        if fingerprint != state::fingerprint(&self.memory.cartridge) {
+            return Err(StateError::DifferentCartridge);
+        }
+
+        let mut restored = self.clone();
+        restored.cpu.load(&mut reader)?;
+        restored.memory.load(&mut reader)?;
+        restored.gpu.load(&mut reader)?;
+        if !reader.is_finished() {
+            return Err(StateError::Invalid("trailing data"));
+        }
+        restored.cpu.clear_idle_loop();
+        restored.memory.apu.take_samples();
+        *self = restored;
+        Ok(())
     }
 
     pub fn render_frame(&mut self) -> Vec<u8> {
@@ -512,6 +566,22 @@ impl WasmEmulator {
             .backup
             .load(data)
             .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Snapshot of the machine for `load_state`; see `GbaCore::save_state` for what it covers.
+    pub fn save_state(&self) -> Vec<u8> {
+        self.core.save_state()
+    }
+
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), JsValue> {
+        self.core
+            .load_state(data)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// The most recently rendered frame (RGBA), for redrawing after `load_state`.
+    pub fn frame(&self) -> Vec<u8> {
+        self.core.gpu.framebuffer.clone()
     }
 
     /// Removes and returns the audio produced so far: interleaved left/right 16-bit samples

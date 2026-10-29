@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Gamepad2, HardDrive, Info, Pause, Play, Rabbit, Settings, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Pause, Play, Rabbit, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
-import { hashRom, loadBackup, storeBackup } from './backupStorage'
+import { hashRom, loadBackup, loadStates, STATE_SLOTS, storeBackup, storeState, validateSaveFile, type StoredState } from './backupStorage'
 import { attachKeyboard } from './keypad'
 import { TouchControls } from './TouchControls'
 import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 
-type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; romHash: string; backupType: string }
+type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; rom: Uint8Array; romHash: string; backupType: string }
+type Toast = { id: number; message: string; tone: 'info' | 'error' }
+const TOAST_DURATION_MS = 2500
 type SaveFlushRef = { current: (() => void) | null }
 const DOCS_URL = '/gba-wasm/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
@@ -155,6 +157,9 @@ function CartridgeMockup({ name }: { name: string }) {
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const emulatorRef = useRef<GbaWasmEmulator | null>(null)
+  // Replaced emulators stay alive until the page that drives them has unmounted, so its frame
+  // loop and save tracking can never call into freed WebAssembly memory.
+  const retiredEmulatorsRef = useRef<GbaWasmEmulator[]>([])
   const flushSaveRef = useRef<(() => void) | null>(null)
   const launchIdRef = useRef(0)
   const navigate = useNavigate()
@@ -184,11 +189,13 @@ function App() {
       if (mounted) setSavedGames(games)
     })
     const flushSave = flushSaveRef
+    const retiredEmulators = retiredEmulatorsRef
     return () => {
       mounted = false
       flushSave.current?.()
       emulatorRef.current?.free()
       emulatorRef.current = null
+      for (const emulator of retiredEmulators.current.splice(0)) emulator.free()
     }
   }, [])
 
@@ -220,13 +227,18 @@ function App() {
       throw error
     }
     flushSaveRef.current?.()
-    emulatorRef.current?.free()
+    if (emulatorRef.current) retiredEmulatorsRef.current.push(emulatorRef.current)
     emulatorRef.current = emulator
     const status = `${info}: ${hasVisibleVideo(pixels) ? 'running' : 'no video output yet'}${saveStatus}`
-    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator, romHash, backupType })
+    setActiveGame({ launchId: ++launchIdRef.current, name, status, pixels, emulator, rom, romHash, backupType })
     setAppStatus(status)
     return pixels
   }
+
+  // Runs after the commit that mounts the new game, when the old page's cleanups have run.
+  useEffect(() => {
+    for (const emulator of retiredEmulatorsRef.current.splice(0)) emulator.free()
+  }, [activeGame])
 
   async function loadRomFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0]
@@ -270,6 +282,16 @@ function App() {
     }
   }
 
+  /** Boots the running cartridge again, for example so it reads an imported save. */
+  async function restartGame(game: ActiveGame, message: string) {
+    try {
+      await executeRom(game.rom, game.name)
+      setAppStatus(message)
+    } catch (error) {
+      setAppStatus(describeError(error).message)
+    }
+  }
+
   async function resumeGame(game: SavedGame) {
     try {
       await executeRom(new Uint8Array(game.rom), game.name)
@@ -307,7 +329,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
-          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} />} />
+          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} onRestart={restartGame} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
         </Routes>
@@ -369,7 +391,7 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
   )
 }
 
-function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef }) {
+function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef, onRestart }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef; onRestart: (game: ActiveGame, message: string) => Promise<void> }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const playSurfaceRef = useRef<HTMLDivElement | null>(null)
   // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
@@ -384,6 +406,109 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   const [noVideoOutput, setNoVideoOutput] = useState(false)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSaves, setShowSaves] = useState(false)
+  const [stateSlots, setStateSlots] = useState<Map<number, StoredState>>(new Map())
+  const [pendingImport, setPendingImport] = useState<{ name: string; data: Uint8Array } | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [toast, setToast] = useState<Toast | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
+  const showToast = useCallback((message: string, tone: Toast['tone'] = 'info') => setToast({ id: Date.now(), message, tone }), [])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), TOAST_DURATION_MS)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const refreshStates = useCallback(async () => {
+    if (!game) return new Map<number, StoredState>()
+    const states = await loadStates(game.romHash)
+    setStateSlots(states)
+    return states
+  }, [game])
+
+  function openSaves() {
+    setShowSaves(true)
+    setImportError(null)
+    setPendingImport(null)
+    void refreshStates().catch((error: unknown) => showToast(`Could not read save states: ${describeError(error).message}`, 'error'))
+  }
+
+  const saveStateToSlot = useCallback(async (slot: number) => {
+    if (!game) return
+    try {
+      const data = game.emulator.save_state()
+      const screenshot = canvasRef.current?.toDataURL('image/png') ?? ''
+      await storeState(game.romHash, slot, data, screenshot)
+      await refreshStates()
+      showToast(`State saved to slot ${slot}`)
+    } catch (error) {
+      showToast(`Could not save state: ${describeError(error).message}`, 'error')
+    }
+  }, [game, refreshStates, showToast])
+
+  const loadStateFromSlot = useCallback(async (slot: number) => {
+    if (!game) return
+    try {
+      const record = (await refreshStates()).get(slot)
+      if (!record) {
+        showToast(`Slot ${slot} is empty`, 'error')
+        return
+      }
+      game.emulator.load_state(new Uint8Array(record.data))
+      // Drop audio generated before the load and show the restored frame, even while paused.
+      game.emulator.take_audio_samples()
+      canvasRef.current?.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(game.emulator.frame()), 240, 160), 0, 0)
+      showToast(`State loaded from slot ${slot}`)
+    } catch (error) {
+      showToast(`Could not load state: ${describeError(error).message}`, 'error')
+    }
+  }, [game, refreshStates, showToast])
+
+  useEffect(() => {
+    if (!game) return
+    // F2 quick-saves and F4 quick-loads slot 1.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.code !== 'F2' && event.code !== 'F4') || event.repeat) return
+      event.preventDefault()
+      void (event.code === 'F2' ? saveStateToSlot(1) : loadStateFromSlot(1))
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [game, saveStateToSlot, loadStateFromSlot])
+
+  function downloadSaveFile() {
+    if (!game) return
+    const data = game.emulator.backup_data()
+    const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: 'application/octet-stream' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${game.name}.sav`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function chooseSaveFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file || !game) return
+    const data = new Uint8Array(await file.arrayBuffer())
+    const problem = validateSaveFile(game.backupType, game.emulator.backup_data().length, data)
+    setImportError(problem)
+    setPendingImport(problem ? null : { name: file.name, data })
+  }
+
+  async function importSaveFile() {
+    if (!game || !pendingImport) return
+    try {
+      // Persist (and stop tracking) the current save first, so it cannot overwrite the import.
+      flushSaveRef.current?.()
+      await storeBackup(game.romHash, game.backupType, pendingImport.data)
+      await onRestart(game, `Imported ${pendingImport.name}; the game restarted with it`)
+    } catch (error) {
+      setImportError(`Could not import: ${describeError(error).message}`)
+    }
+  }
   const [showDetails, setShowDetails] = useState(false)
   const [showStartupSplash, setShowStartupSplash] = useState(() => !settings.skipStartupSplash)
   const splashVisible = showStartupSplash && !settings.skipStartupSplash
@@ -482,7 +607,8 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       if (!savePending) return
       savePending = false
       const data = game.emulator.backup_data()
-      void storeBackup(game.romHash, game.backupType, data).catch((error: unknown) => {
+      void storeBackup(game.romHash, game.backupType, data).then(() => showToast('Game saved')).catch((error: unknown) => {
+        showToast(`Could not store save data: ${describeError(error).message}`, 'error')
         onRuntimeError(`Could not store save data: ${describeError(error).message}`)
       })
     }
@@ -511,7 +637,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     return () => {
       if (flushSaveRef.current === close) close()
     }
-  }, [game, flushSaveRef, onRuntimeError])
+  }, [game, flushSaveRef, onRuntimeError, showToast])
 
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
@@ -593,7 +719,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
 
   return (
     <section className="emulator-page">
-      <div className="emulator-heading"><div><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
+      <div className="emulator-heading"><div><h1>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
         <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`} ref={playSurfaceRef}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
@@ -613,6 +739,43 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
           {cartridgeDetails}
         </section>
       </div>} */}
+      {toast && <div key={toast.id} className={`toast toast-${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'}>{toast.message}</div>}
+      {showSaves && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSaves(false)}>
+        <section className="settings-modal saves-modal" role="dialog" aria-modal="true" aria-labelledby="saves-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="settings-modal-heading"><div><p className="eyebrow">PROGRESS</p><h2 id="saves-title">Saves</h2></div><button className="modal-close" onClick={() => setShowSaves(false)} aria-label="Close saves"><X size={18} /></button></div>
+          <div className="saves-section">
+            <span><strong>Save states</strong><small>Snapshots of the whole console, restored exactly where you left off. <kbd>F2</kbd> saves slot 1, <kbd>F4</kbd> loads it.</small></span>
+            <div className="state-slots">
+              {STATE_SLOTS.map((slot) => {
+                const record = stateSlots.get(slot)
+                return (
+                  <article className="state-slot" key={slot}>
+                    {record?.screenshot ? <img src={record.screenshot} alt={`Slot ${slot} screenshot`} /> : <div className="state-slot-empty" aria-hidden="true">EMPTY</div>}
+                    <div className="state-slot-info"><strong>Slot {slot}</strong><small>{record ? formatSavedDate(record.savedAt) : 'No state saved'}</small></div>
+                    <div className="state-slot-actions">
+                      <button type="button" className="secondary-button" onClick={() => void saveStateToSlot(slot)}>Save</button>
+                      <button type="button" className="secondary-button" disabled={!record} onClick={() => void loadStateFromSlot(slot)}>Load</button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          </div>
+          <div className="saves-section">
+            <span><strong>Save file</strong><small>{game.backupType === 'none' ? 'This cartridge has no save memory.' : `The game's own ${game.backupType} save is stored automatically whenever the game saves. Loading a state never changes it.`}</small></span>
+            <div className="save-file-actions">
+              <button type="button" className="secondary-button" disabled={game.emulator.backup_data().length === 0} onClick={downloadSaveFile}><Download size={16} /> Download .sav</button>
+              <button type="button" className="secondary-button" disabled={game.backupType === 'none'} onClick={() => importInputRef.current?.click()}><Upload size={16} /> Import .sav</button>
+              <input ref={importInputRef} className="file-input" type="file" accept=".sav,application/octet-stream" onChange={(event) => void chooseSaveFile(event)} />
+            </div>
+            {importError && <p className="save-import-error" role="alert">{importError}</p>}
+            {pendingImport && <div className="save-import-confirm" role="alert">
+              <p>Replace this game's save with <strong>{pendingImport.name}</strong>? The game restarts to read it, and unsaved progress since its last save is lost.</p>
+              <div><button type="button" className="primary-button" onClick={() => void importSaveFile()}>Replace and restart</button><button type="button" className="secondary-button" onClick={() => setPendingImport(null)}>Cancel</button></div>
+            </div>}
+          </div>
+        </section>
+      </div>}
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>

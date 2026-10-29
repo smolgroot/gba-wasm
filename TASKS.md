@@ -237,6 +237,24 @@ Acceptance criteria:
 
 SRAM and Flash (64/128 KiB) are detected from SDK library strings, emulated with Rust tests, and persisted per ROM hash in versioned IndexedDB records (see [WASM Boundary](doc/architecture/wasm-boundary.md)). A headless Chrome run confirmed a Flash save is stored and restored. EEPROM (512 bytes/8 KiB) was added next, with its size inferred from the first DMA request.
 
+### SAVE-02: Save states and save file transfer
+
+**Status:** `DONE`
+**Priority:** `P1`
+**Depends on:** SAVE-01
+
+As a user, I want to save and restore my exact position at any moment and move save files between browsers or emulators.
+
+Acceptance criteria:
+
+- Snapshot and restore the whole machine with a versioned format that rejects states from other cartridges or format versions without changing the running game.
+- Prove completeness: a restored state must replay identically to the original run.
+- Loading a state never changes the game's own save file.
+- Export and import raw `.sav` files with size validation and confirmation before replacing a save.
+- Confirm saves visibly.
+
+See [WASM Boundary](doc/architecture/wasm-boundary.md#save-states).
+
 ## P2: Compatibility and fidelity
 
 ### CPU-03: Complete the ARM7TDMI instruction set needed by targets

@@ -6,6 +6,7 @@
 //! cycles. Mixing approximates the analog stage: the result is clamped to the hardware's
 //! 10-bit range around the bias and scaled to 16 bits.
 
+use crate::state::impl_state;
 use std::collections::VecDeque;
 
 pub const SAMPLE_RATE: u32 = 32_768;
@@ -183,6 +184,45 @@ struct Fifo {
     queue: VecDeque<i8>,
     current: i8,
 }
+
+impl_state!(Envelope {
+    volume,
+    step_time,
+    increase,
+    timer
+});
+impl_state!(Length { remaining, enabled });
+impl_state!(Square {
+    enabled,
+    frequency,
+    duty,
+    step,
+    timer,
+    length,
+    envelope,
+    sweep_timer,
+    sweep_enabled,
+    shadow_frequency,
+});
+impl_state!(Wave {
+    enabled,
+    frequency,
+    position,
+    timer,
+    length
+});
+impl_state!(Noise {
+    enabled,
+    lfsr,
+    timer,
+    length,
+    envelope
+});
+impl_state!(Fifo { queue, current });
+// Buffered output samples belong to the browser, not to the machine state.
+impl_state!(Apu {
+    squares, wave, noise, wave_ram, fifos, sample_cycles, sequencer_cycles, sequencer_step,
+} skip { samples });
 
 #[derive(Debug, Clone, Default)]
 pub struct Apu {

@@ -1,6 +1,7 @@
 //! Scanline PPU: renders each visible line from emulated I/O, VRAM, palette RAM, and OAM.
 
 use crate::memory::MemoryMap;
+use crate::state::impl_state;
 
 pub const SCREEN_WIDTH: usize = 240;
 pub const SCREEN_HEIGHT: usize = 160;
@@ -121,6 +122,11 @@ pub struct GpuCore {
     /// Internal BG2/BG3 affine reference point (x, y) in 20.8 fixed point.
     affine_reference: [[i32; 2]; 2],
 }
+
+impl_state!(GpuCore {
+    framebuffer,
+    affine_reference
+});
 
 impl GpuCore {
     pub fn new() -> Self {

@@ -4,7 +4,7 @@
 //! test in its result register (0 when every test passed): r12 for the ARM-state
 //! suites and r7 for `thumb.gba`.
 
-use gba_wasm::{GbaCore, SCREEN_WIDTH};
+use gba_wasm::{GbaCore, SCREEN_WIDTH, StateError};
 
 const IDLE_LOOP: u32 = 0xEAFF_FFFE;
 const STEP_LIMIT: u32 = 2_000_000;
@@ -138,5 +138,71 @@ fn paused_and_resumed_run_matches_an_uninterrupted_run() {
     assert_eq!(
         paused.memory.vblanks_started(),
         FRAMES_TO_RESULT_SCREEN as u64
+    );
+}
+
+/// Runs `frames` frames and returns every frame plus all audio produced.
+fn record(core: &mut GbaCore, frames: usize) -> (Vec<Vec<u8>>, Vec<i16>) {
+    let mut video = Vec::new();
+    let mut audio = Vec::new();
+    for _ in 0..frames {
+        video.push(core.step_frame().unwrap());
+        audio.extend(core.memory.apu.take_samples());
+    }
+    (video, audio)
+}
+
+/// A state restored into a fresh core must replay exactly like the original run: any
+/// machine state the format misses would make the two diverge.
+#[test]
+fn save_state_restored_in_a_new_core_replays_identically() {
+    let rom = include_bytes!("fixtures/gba-tests/arm.gba");
+    let mut original = GbaCore::new();
+    original.load_rom(rom).unwrap();
+    record(&mut original, 3);
+    let state = original.save_state();
+    let expected = record(&mut original, FRAMES_TO_RESULT_SCREEN);
+
+    let mut restored = GbaCore::new();
+    restored.load_rom(rom).unwrap();
+    record(&mut restored, 1);
+    restored.load_state(&state).unwrap();
+
+    assert_eq!(record(&mut restored, FRAMES_TO_RESULT_SCREEN), expected);
+    assert_eq!(restored.cpu.registers, original.cpu.registers);
+}
+
+#[test]
+fn save_state_errors_leave_the_running_core_unchanged() {
+    let arm = include_bytes!("fixtures/gba-tests/arm.gba");
+    let thumb = include_bytes!("fixtures/gba-tests/thumb.gba");
+    let mut other = GbaCore::new();
+    other.load_rom(thumb).unwrap();
+    let other_state = other.save_state();
+    let mut core = GbaCore::new();
+    core.load_rom(arm).unwrap();
+    record(&mut core, 2);
+    let state = core.save_state();
+    let before = core.save_state();
+
+    assert_eq!(
+        core.load_state(&other_state),
+        Err(StateError::DifferentCartridge)
+    );
+    assert_eq!(
+        core.load_state(&state[..state.len() - 1]),
+        Err(StateError::Truncated)
+    );
+    assert_eq!(core.load_state(b"not a state"), Err(StateError::NotAState));
+    let mut future = state.clone();
+    future[8..12].copy_from_slice(&99u32.to_le_bytes());
+    assert!(matches!(
+        core.load_state(&future),
+        Err(StateError::UnsupportedVersion { found: 99, .. })
+    ));
+    assert_eq!(
+        core.save_state(),
+        before,
+        "failed loads must not change the core"
     );
 }
