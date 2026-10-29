@@ -183,19 +183,20 @@ describe('TouchControls', () => {
     expect(onChange).toHaveBeenCalledTimes(1)
   })
 
-  it('ticks firmly for a press and lightly for a D-pad direction change', () => {
+  it('ticks for button presses but not the D-pad', () => {
     render(true)
     const dpad = center('dpad')
     pointer('pointerdown', 1, { x: dpad.x + 30, y: dpad.y })
-    expect(hapticTick).toHaveBeenLastCalledWith(true)
     pointer('pointermove', 1, { x: dpad.x + 30, y: dpad.y - 30 })
-    expect(hapticTick).toHaveBeenLastCalledWith(false)
-    pointer('pointerdown', 2, center('A'))
-    expect(hapticTick).toHaveBeenLastCalledWith(true)
-    // Releases do not tick.
-    vi.mocked(hapticTick).mockClear()
-    pointer('pointerup', 2, center('A'))
     expect(hapticTick).not.toHaveBeenCalled()
+    pointer('pointerdown', 2, center('A'))
+    expect(hapticTick).toHaveBeenCalledTimes(1)
+    pointer('pointermove', 2, center('B'))
+    expect(hapticTick).toHaveBeenCalledTimes(2)
+    // Releases do not tick.
+    pointer('pointerup', 2, center('B'))
+    pointer('pointerup', 1, dpad)
+    expect(hapticTick).toHaveBeenCalledTimes(2)
   })
 
   it('does not tick when haptics are off', () => {

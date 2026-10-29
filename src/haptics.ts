@@ -7,7 +7,8 @@
 //
 // Chrome on Android passes the duration straight to the legacy one-shot vibrator at default
 // amplitude. The LRA in phones like the Pixel 8 needs ~20 ms to spin up, so shorter pulses are
-// dropped or imperceptible. Chrome also ignores vibrate() entirely while the ringer is on Silent.
+// dropped or imperceptible. Chrome also ignores vibrate() entirely while the ringer is on Silent,
+// and Android scales it by Settings > Vibration & haptics > Touch feedback (off at zero).
 
 let iosSwitch: HTMLLabelElement | null = null
 
@@ -26,8 +27,8 @@ function clickIosSwitch() {
   iosSwitch.click()
 }
 
-/** Plays a short tick; `strong` for a new press, light for a D-pad direction change. */
-export function hapticTick(strong = true) {
-  if (typeof navigator.vibrate === 'function') navigator.vibrate(strong ? 30 : 20)
+/** Plays a short tick for a button press. */
+export function hapticTick() {
+  if (typeof navigator.vibrate === 'function') navigator.vibrate(30)
   else clickIosSwitch()
 }

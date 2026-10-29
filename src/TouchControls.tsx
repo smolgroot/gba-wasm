@@ -68,8 +68,8 @@ export function TouchControls({ theme, haptics, onChange }: { theme: TouchTheme;
       const mask = [...pointers.values()].reduce((combined, pointer) => combined | pointer.mask, 0)
       if (mask === reported) return
       const pressed = mask & ~reported
-      // A firm tick for a new press, a light one when a held D-pad only changes direction.
-      if (pressed && hapticsRef.current) hapticTick((pressed & ~DPAD_DIRECTIONS) !== 0 || (reported & DPAD_DIRECTIONS) === 0)
+      // Tick for newly pressed buttons only: D-pad directions change too often while steering.
+      if ((pressed & ~DPAD_DIRECTIONS) !== 0 && hapticsRef.current) hapticTick()
       reported = mask
       root.querySelectorAll<HTMLElement>('[data-gba]').forEach((element) => {
         const key = element.dataset.gba
