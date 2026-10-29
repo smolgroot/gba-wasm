@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Pause, Play, Rabbit, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
@@ -27,7 +27,6 @@ const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['
 // Games write saves over several frames; persist once writes have stopped for this long.
 const SAVE_QUIET_FRAMES = 30
 // Keep in sync with the touch overlay media query in App.css.
-const TOUCH_LANDSCAPE_QUERY = '(orientation: landscape) and (pointer: coarse) and (max-height: 540px)'
 
 type GameSpeed = 'slow' | 'normal' | 'fast'
 
@@ -399,7 +398,6 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
 
 function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef, onRestart }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef; onRestart: (game: ActiveGame, message: string) => Promise<void> }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const playSurfaceRef = useRef<HTMLDivElement | null>(null)
   // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
   const pausedRef = useRef(false)
   const audioRef = useRef<AudioOutput | null>(null)
@@ -551,15 +549,8 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     sendKeys()
   }, [sendKeys])
 
-  // In phone landscape the touch overlay fills the viewport, so bring it into view on rotation.
-  useEffect(() => {
-    if (!game || !settings.touchControls) return
-    const landscape = matchMedia(TOUCH_LANDSCAPE_QUERY)
-    const reveal = () => { if (landscape.matches) playSurfaceRef.current?.scrollIntoView({ block: 'start' }) }
-    reveal()
-    landscape.addEventListener('change', reveal)
-    return () => landscape.removeEventListener('change', reveal)
-  }, [game, settings.touchControls])
+  // Phone landscape hides the heading actions behind a floating toggle (see App.css); other layouts ignore this.
+  const [showActions, setShowActions] = useState(false)
 
   useEffect(() => {
     if (!game) return
@@ -724,10 +715,10 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   </>
 
   return (
-    <section className="emulator-page">
-      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions"><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
+    <section className={showActions ? 'emulator-page actions-open' : 'emulator-page'}>
+      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
       <div className="emulator-layout">
-        <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`} ref={playSurfaceRef}>
+        <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
             {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><strong>GBA<span>-</span>WASM</strong><small>Tap to skip</small></button>}
             {!splashVisible && !runtimeError && paused && <button className="emulation-notice paused-notice" onClick={togglePause}><strong>Paused</strong><span>Press P or click to resume.</span></button>}
@@ -735,6 +726,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
           {settings.touchControls && <TouchControls theme={settings.touchTheme} haptics={settings.haptics} onChange={onTouchKeys} />}
+          {settings.touchControls && <button className="landscape-actions-toggle" onClick={() => setShowActions(!showActions)} aria-expanded={showActions} aria-label={showActions ? 'Hide menu' : 'Show menu'} title={showActions ? 'Hide menu' : 'Show menu'}>{showActions ? <X size={16} /> : <Menu size={16} />}</button>}
         </div>
         <aside className="emulator-aside">{cartridgeDetails}</aside>
       </div>

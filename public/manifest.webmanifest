@@ -5,7 +5,8 @@
   "id": "/gba-wasm/",
   "start_url": "/gba-wasm/",
   "scope": "/gba-wasm/",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#19171e",
   "theme_color": "#19171e",
   "icons": [

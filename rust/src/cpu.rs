@@ -1987,15 +1987,22 @@ fn write_decompressed(memory: &mut MemoryMap, destination: u32, data: &[u8], uni
     }
 }
 
-/// Reads a BIOS compression header: returns the decompressed size when the type matches.
-fn compression_header(memory: &MemoryMap, source: u32, kind: u32) -> Option<usize> {
-    let header = memory.read_u32(source & !3);
-    ((header >> 4) & 0xF == kind).then_some((header >> 8) as usize)
+/// Reads a BIOS compression header and returns the decompressed size. Like the hardware
+/// BIOS, the type nibble is not checked; sources in the BIOS region (bits 25-27 clear)
+/// make the call return without action, which is modeled as an empty output.
+fn compression_header(memory: &MemoryMap, source: u32) -> Option<usize> {
+    if source & 0x0E00_0000 == 0 {
+        return Some(0);
+    }
+    Some((memory.read_u32(source & !3) >> 8) as usize)
 }
 
 /// Decodes a BIOS Huffman stream (header type 2) with 4- or 8-bit data units.
 fn huffman_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
-    let size = compression_header(memory, source, 2)?;
+    let size = compression_header(memory, source)?;
+    if size == 0 {
+        return Some(Vec::new());
+    }
     let bits_per_unit = memory.read_u32(source & !3) & 0xF;
     if bits_per_unit != 4 && bits_per_unit != 8 {
         return None;
@@ -2039,7 +2046,7 @@ fn huffman_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
 
 /// Decodes a BIOS run-length stream (header type 3).
 fn run_length_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
-    let size = compression_header(memory, source, 3)?;
+    let size = compression_header(memory, source)?;
     let mut output = Vec::with_capacity(size);
     let mut cursor = (source & !3).wrapping_add(4);
     while output.len() < size {
@@ -2060,9 +2067,9 @@ fn run_length_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
     Some(output)
 }
 
-/// Decodes a BIOS LZ77 stream (header type 1). Returns `None` for other header types.
+/// Decodes a BIOS LZ77 stream (header type 1).
 fn lz77_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
-    let size = compression_header(memory, source, 1)?;
+    let size = compression_header(memory, source)?;
     let mut output = Vec::with_capacity(size);
     let mut cursor = (source & !3).wrapping_add(4);
     let mut next_byte = || {
@@ -2799,6 +2806,38 @@ mod tests {
         cpu.step(&mut memory).unwrap();
         assert_eq!(memory.read_u16(0x0600_0000), u16::from_le_bytes(*b"AB"));
         assert_eq!(memory.read_u16(0x0600_0008), u16::from_le_bytes(*b"CX"));
+    }
+
+    #[test]
+    fn lz77_service_ignores_the_header_type_like_the_hardware_bios() {
+        let mut rom = program(&[0xDF11]);
+        rom.resize(0x20, 0);
+        let mut stream = LZ77_SAMPLE;
+        stream[0] = 0x00; // type nibble 0 instead of 1
+        rom.extend(stream);
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[0] = ROM_BASE + 0x20;
+        cpu.registers[1] = 0x0200_0000;
+
+        cpu.step(&mut memory).unwrap();
+        let expanded: Vec<u8> = (0..10).map(|i| memory.read_u8(0x0200_0000 + i)).collect();
+        assert_eq!(&expanded, b"ABCABCABCX");
+    }
+
+    #[test]
+    fn decompression_services_skip_sources_in_the_bios_region() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF11, 0xDF13, 0xDF14]));
+        memory.write_u32(0x0200_0000, 0xAAAA_AAAA);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        for _ in 0..3 {
+            cpu.registers[0] = 0x0000_0100;
+            cpu.registers[1] = 0x0200_0000;
+            cpu.step(&mut memory).unwrap();
+        }
+        assert_eq!(memory.read_u32(0x0200_0000), 0xAAAA_AAAA);
     }
 
     #[test]

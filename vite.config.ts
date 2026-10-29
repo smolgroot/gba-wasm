@@ -27,7 +27,8 @@ export default defineConfig({
         id: base,
         theme_color: '#19171e',
         background_color: '#19171e',
-        display: 'standalone',
+        display: 'fullscreen',
+        display_override: ['fullscreen', 'standalone'],
         start_url: base,
         scope: base,
         icons: [

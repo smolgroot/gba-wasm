@@ -342,10 +342,21 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
   .has-touch-controls .touch-system { position: absolute; left: 0; right: 0; bottom: 10px; }
 }
 
-/* Phone landscape with touch controls: no site header or footer, the game owns the page. */
+/* Toggles the heading actions over the game; only shown in phone landscape below. */
+.landscape-actions-toggle { display: none; }
+
+/* Phone landscape with touch controls: a fixed, non-scrolling viewport holding only the game and the
+   floating buttons. The heading actions appear over the game from a toggle between L and R. */
 @media (orientation: landscape) and (pointer: coarse) and (max-height: 540px) {
-  .touch-play .site-header, .touch-play .site-footer { display: none; }
-  .touch-play .emulator-page { padding-bottom: 0; }
+  .app-shell.touch-play { height: 100dvh; min-height: 0; overscroll-behavior: none; }
+  .touch-play .site-header, .touch-play .site-footer, .touch-play .emulator-title { display: none; }
+  .touch-play main { flex: 1; min-height: 0; }
+  .touch-play .emulator-page { position: relative; width: 100%; height: 100%; padding: 0; }
+  .touch-play .emulator-heading { display: none; }
+  .touch-play .actions-open .emulator-heading { position: absolute; z-index: 2; top: 56px; left: 0; right: 0; display: flex; justify-content: center; margin: 0; }
+  .touch-play .emulator-heading-actions { max-width: calc(100% - 32px); flex-wrap: wrap; justify-content: center; padding: 6px; border: 1px solid var(--touch-border); background: color-mix(in srgb, var(--touch-bg) 88%, transparent); }
+  .touch-play .landscape-actions-toggle { position: absolute; top: 12px; left: 50%; width: 40px; height: 34px; display: grid; place-items: center; border: 1px solid var(--touch-border); border-radius: 13px; background: var(--touch-surface); color: var(--touch-label); opacity: .42; transform: translateX(-50%); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .touch-play .landscape-actions-toggle[aria-expanded="true"] { opacity: .9; }
 }
 
 /* Portrait touch screens with touch controls: full-height page in the touch theme, keeping only the action buttons. */
