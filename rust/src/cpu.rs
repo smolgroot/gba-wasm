@@ -1,5 +1,5 @@
 use crate::bios::IRQ_VECTOR;
-use crate::memory::{IME_ADDR, MemoryMap};
+use crate::memory::{BIOS_LATCH_AFTER_SWI, IME_ADDR, MemoryMap};
 use crate::state::{State, StateError, StateReader, StateWriter, impl_state};
 use std::fmt;
 
@@ -268,6 +268,7 @@ impl ThumbCpu {
         }
 
         let faulting_pc = self.registers[15];
+        memory.note_opcode_fetch(faulting_pc, self.is_thumb());
         if let Some(idle_cycles) = self.idle_loop_skip(memory, faulting_pc) {
             return Ok(idle_cycles);
         }
@@ -1692,6 +1693,8 @@ impl ThumbCpu {
         state: ExecutionState,
         service: u8,
     ) -> Result<(), CpuError> {
+        // The hardware BIOS returns from every service through the same opcode.
+        memory.set_bios_latch(BIOS_LATCH_AFTER_SWI);
         match service {
             0x01 if self.registers[0] & !0xFF == 0 => {
                 self.register_ram_reset(memory, self.registers[0]);
@@ -2824,6 +2827,20 @@ mod tests {
         cpu.step(&mut memory).unwrap();
         let expanded: Vec<u8> = (0..10).map(|i| memory.read_u8(0x0200_0000 + i)).collect();
         assert_eq!(&expanded, b"ABCABCABCX");
+    }
+
+    #[test]
+    fn bios_reads_after_a_service_return_the_swi_exit_opcode() {
+        // MOVS r0, #0; LDR r1, [r0]; MOVS r1, #1; SWI 0x06 (Div); MOVS r0, #0; LDR r1, [r0]
+        let rom = program(&[0x2000, 0x6801, 0x2101, 0xDF06, 0x2000, 0x6801]);
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&rom);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        cpu.run_steps(&mut memory, 2).unwrap();
+        assert_eq!(cpu.registers[1], 0xE129_F000);
+        cpu.run_steps(&mut memory, 4).unwrap();
+        assert_eq!(cpu.registers[1], BIOS_LATCH_AFTER_SWI);
     }
 
     #[test]

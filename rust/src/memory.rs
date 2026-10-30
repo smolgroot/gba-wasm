@@ -39,6 +39,11 @@ const DMA_REPEAT: u16 = 1 << 9;
 const DMA_WORD: u16 = 1 << 10;
 const DMA_IRQ_ENABLE: u16 = 1 << 14;
 const DMA_ENABLE: u16 = 1 << 15;
+const BIOS_END: u32 = 0x0000_3FFF;
+/// BIOS opcode left in the read-protection latch at startup ([0xDC + 8]).
+const BIOS_LATCH_AFTER_BOOT: u32 = 0xE129_F000;
+/// BIOS opcode left in the latch when a software interrupt returns ([0x188 + 8]).
+pub const BIOS_LATCH_AFTER_SWI: u32 = 0xE3A0_2004;
 const DMA_TIMING_IMMEDIATE: u16 = 0;
 const DMA_TIMING_VBLANK: u16 = 1;
 const DMA_TIMING_HBLANK: u16 = 2;
@@ -234,11 +239,12 @@ impl_state!(DmaChannel {
     pending
 });
 // The BIOS image and ROM are not state; held keys stay live; the volatile-read flag only
-// feeds the idle-loop detector.
+// feeds the idle-loop detector. The fetch address is set again by the next instruction, and
+// the BIOS latch is left out so states from before it was modeled still load.
 impl_state!(MemoryMap {
     backup, apu, ewram, iwram, vram, oam, palette, io, video_cycles, vblanks_started, timers,
     dma, affine_reference_writes,
-} skip { bios, cartridge, pressed_keys, volatile_read });
+} skip { bios, cartridge, pressed_keys, volatile_read, fetch, bios_latch });
 
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
@@ -261,6 +267,17 @@ pub struct MemoryMap {
     /// Set by reads of registers that change on every cycle (timer counters, sound status),
     /// which make a polling loop's outcome depend on time between events.
     volatile_read: std::cell::Cell<bool>,
+    /// Address and state of the instruction being executed, which decide what BIOS and
+    /// unmapped reads return.
+    fetch: OpcodeFetch,
+    /// Last opcode fetched from the BIOS. Reads of the BIOS from outside it return this.
+    bios_latch: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OpcodeFetch {
+    address: u32,
+    thumb: bool,
 }
 
 impl MemoryMap {
@@ -283,6 +300,11 @@ impl MemoryMap {
             dma: [DmaChannel::default(); 4],
             affine_reference_writes: [false; 2],
             volatile_read: std::cell::Cell::new(false),
+            fetch: OpcodeFetch {
+                address: 0,
+                thumb: false,
+            },
+            bios_latch: BIOS_LATCH_AFTER_BOOT,
         };
         memory.reset_io_registers();
         memory
@@ -812,9 +834,74 @@ impl MemoryMap {
         }
     }
 
+    /// Records the instruction about to execute. Code running in the BIOS updates the
+    /// BIOS latch with the opcode it prefetches ([pc + 8]).
+    pub fn note_opcode_fetch(&mut self, address: u32, thumb: bool) {
+        self.fetch = OpcodeFetch { address, thumb };
+        if address <= BIOS_END && !thumb {
+            self.bios_latch = self.bios_word((address & !3).wrapping_add(8));
+        }
+    }
+
+    pub fn set_bios_latch(&mut self, value: u32) {
+        self.bios_latch = value;
+    }
+
+    fn bios_word(&self, addr: u32) -> u32 {
+        let offset = (addr & BIOS_END & !3) as usize;
+        u32::from_le_bytes(self.bios[offset..offset + 4].try_into().unwrap())
+    }
+
+    /// The BIOS can only be read by code running inside it; other reads see the latch.
+    fn read_bios_u8(&self, addr: u32) -> u8 {
+        if self.fetch.address <= BIOS_END {
+            self.bios[addr as usize]
+        } else {
+            (self.bios_latch >> ((addr & 3) * 8)) as u8
+        }
+    }
+
+    /// Unmapped reads return the opcode the CPU prefetched last (GBATEK "Unpredictable
+    /// Things"). ARM code leaves [pc + 8] on the bus; THUMB code leaves [pc + 4] in both
+    /// halves, except in the BIOS, OAM, and IWRAM, which keep the neighbouring halfword in
+    /// one half (the old bus value in IWRAM, approximated by [pc + 2]).
+    fn open_bus_u8(&self, addr: u32) -> u8 {
+        let OpcodeFetch { address: pc, thumb } = self.fetch;
+        let value = if !thumb {
+            self.read_mapped_u32((pc & !3).wrapping_add(8))
+        } else {
+            let halfword = |offset: u32| u32::from(self.read_mapped_u16(pc.wrapping_add(offset)));
+            let aligned = pc & 2 == 0;
+            match pc >> 24 {
+                0x00 | 0x07 if aligned => halfword(4) | halfword(6) << 16,
+                0x00 | 0x07 => halfword(2) | halfword(4) << 16,
+                0x03 if aligned => halfword(4) | halfword(2) << 16,
+                0x03 => halfword(2) | halfword(4) << 16,
+                _ => halfword(4) * 0x0001_0001,
+            }
+        };
+        (value >> ((addr & 3) * 8)) as u8
+    }
+
+    /// Opcode reads for the open-bus value. Only memory that can hold code is read, so an
+    /// unmapped program counter cannot recurse into the open bus and I/O is not touched.
+    fn read_mapped_u16(&self, addr: u32) -> u16 {
+        let addr = addr & !1;
+        let byte = |addr: u32| match addr {
+            0x0000_0000..=BIOS_END => self.bios[addr as usize],
+            0x0200_0000..=0x03FF_FFFF | 0x0500_0000..=0x0DFF_FFFF => self.read_u8(addr),
+            _ => 0,
+        };
+        u16::from(byte(addr)) | u16::from(byte(addr + 1)) << 8
+    }
+
+    fn read_mapped_u32(&self, addr: u32) -> u32 {
+        u32::from(self.read_mapped_u16(addr)) | u32::from(self.read_mapped_u16(addr + 2)) << 16
+    }
+
     pub fn read_u8(&self, addr: u32) -> u8 {
         match addr {
-            0x0000_0000..=0x0000_3FFF => self.bios[addr as usize],
+            0x0000_0000..=BIOS_END => self.read_bios_u8(addr),
             0x0200_0000..=0x02FF_FFFF => self.ewram[(addr as usize - 0x0200_0000) % EWRAM_SIZE],
             0x0300_0000..=0x03FF_FFFF => self.iwram[(addr as usize - 0x0300_0000) % IWRAM_SIZE],
             IO_BASE..=0x0400_03FF => self.read_io(addr as usize - IO_BASE as usize),
@@ -826,7 +913,7 @@ impl MemoryMap {
                 self.cartridge.get(offset).copied().unwrap_or(0xFF)
             }
             BACKUP_START..=0x0FFF_FFFF => self.backup.read((addr & BACKUP_WINDOW_MASK) as usize),
-            _ => 0,
+            _ => self.open_bus_u8(addr),
         }
     }
 
@@ -893,7 +980,7 @@ impl MemoryMap {
             return self.backup.peek_eeprom_bit();
         }
         // Backup memory has an 8-bit bus: wide reads repeat the addressed byte.
-        if addr >= BACKUP_START {
+        if (BACKUP_START..=0x0FFF_FFFF).contains(&addr) {
             return u16::from(self.read_u8(addr)) * 0x0101;
         }
         let aligned_addr = addr & !1;
@@ -903,7 +990,7 @@ impl MemoryMap {
     }
 
     pub fn read_u32(&self, addr: u32) -> u32 {
-        if addr >= BACKUP_START {
+        if (BACKUP_START..=0x0FFF_FFFF).contains(&addr) {
             return u32::from(self.read_u8(addr)) * 0x0101_0101;
         }
         let aligned_addr = addr & !3;
@@ -943,6 +1030,7 @@ impl Default for MemoryMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpu::ROM_BASE;
 
     #[test]
     fn vram_reads_and_writes_bytes_at_their_offsets() {
@@ -983,7 +1071,42 @@ mod tests {
 
         assert_eq!(memory.read_u16(DISPCNT_ADDR), 0x0403);
         assert_eq!(memory.read_u8(0x0400_03FF), 0);
-        assert_eq!(memory.read_u8(0x0400_0400), 0);
+        assert_eq!(memory.read_u8(0x0400_0400), memory.read_u8(0x1000_0000));
+    }
+
+    #[test]
+    fn bios_reads_from_outside_the_bios_return_the_last_bios_opcode() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&[0; 0x10]);
+        let image_word = u32::from_le_bytes(memory.bios[0..4].try_into().unwrap());
+
+        assert_eq!(memory.read_u32(0x0000_0000), image_word);
+        memory.note_opcode_fetch(ROM_BASE, true);
+        assert_eq!(memory.read_u32(0x0000_0000), BIOS_LATCH_AFTER_BOOT);
+        assert_eq!(memory.read_u8(0x0000_1001), (BIOS_LATCH_AFTER_BOOT >> 8) as u8);
+
+        // The IRQ dispatcher's last fetch before returning is [0x13C + 8].
+        memory.note_opcode_fetch(0x0000_013C, false);
+        let prefetched = u32::from_le_bytes(memory.bios[0x144..0x148].try_into().unwrap());
+        memory.note_opcode_fetch(ROM_BASE, true);
+        assert_eq!(memory.read_u32(0x0000_0000), prefetched);
+    }
+
+    #[test]
+    fn unmapped_reads_return_the_prefetched_opcode() {
+        let mut memory = MemoryMap::new();
+        let mut rom = vec![0; 0x20];
+        rom[0x08..0x0C].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+        rom[0x0C..0x10].copy_from_slice(&0x5566_7788u32.to_le_bytes());
+        memory.load_cartridge(&rom);
+
+        memory.note_opcode_fetch(ROM_BASE + 0x04, true);
+        assert_eq!(memory.read_u32(0x1000_0000), 0x3344_3344);
+        assert_eq!(memory.read_u16(0x0000_4002), 0x3344);
+        assert_eq!(memory.read_u8(0xFA79_DE1B), 0x33);
+
+        memory.note_opcode_fetch(ROM_BASE + 0x04, false);
+        assert_eq!(memory.read_u32(0x1000_0000), 0x5566_7788);
     }
 
     #[test]
