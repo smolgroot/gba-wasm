@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview",
+    "boxart:fetch": "node scripts/fetch-boxart.ts",
     "wasm:build": "wasm-pack build ./rust --target web --out-dir ../public/wasm --release"
   },
   "dependencies": {

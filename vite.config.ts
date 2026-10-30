@@ -19,6 +19,8 @@ export default defineConfig({
         'icons.svg',
         'icons/icon-192.png',
         'icons/icon-512.png',
+        // Featured cartridge covers, so the home page cover flow works offline.
+        'boxart/*.webp',
       ],
       manifest: {
         name: 'GBA WASM',

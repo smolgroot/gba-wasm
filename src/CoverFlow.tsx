@@ -11,9 +11,14 @@ import ChevronLeft from '@mui/icons-material/ChevronLeft'
 import ChevronRight from '@mui/icons-material/ChevronRight'
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded'
 import FileUploadOutlined from '@mui/icons-material/FileUploadOutlined'
-import { gbaBoxArtUrl, type FeaturedGame } from './featuredGames'
+import type { FeaturedGame } from './featuredGames'
 
 const AUTOPLAY_INTERVAL_MS = 3500
+
+/** Local thumbnail written by `pnpm run boxart:fetch` and precached by the service worker. */
+function coverUrl(game: FeaturedGame) {
+  return `${import.meta.env.BASE_URL}boxart/${game.id}.webp`
+}
 // Horizontal drag, in pixels, that counts as a swipe to the next cover.
 const SWIPE_THRESHOLD_PX = 40
 // Covers further than this from the centre are hidden.
@@ -148,7 +153,7 @@ export function CoverFlow({ games, isInLibrary, onLaunch }: CoverFlowProps) {
                 <>
                   <Box
                     component="img"
-                    src={gbaBoxArtUrl(game.boxArtName)}
+                    src={coverUrl(game)}
                     alt=""
                     draggable={false}
                     loading="lazy"
@@ -158,7 +163,7 @@ export function CoverFlow({ games, isInLibrary, onLaunch }: CoverFlowProps) {
                   {/* Mirrored copy fading out below the cover, the floor reflection of the iPod cover flow. */}
                   <Box
                     component="img"
-                    src={gbaBoxArtUrl(game.boxArtName)}
+                    src={coverUrl(game)}
                     alt=""
                     aria-hidden
                     draggable={false}

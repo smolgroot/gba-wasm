@@ -10,7 +10,7 @@ export type FeaturedGame = {
   id: string
   title: string
   year: number
-  /** No-Intro name used to fetch the libretro box art. */
+  /** No-Intro name of the libretro box art that `pnpm run boxart:fetch` thumbnails into public/boxart/<id>.webp. */
   boxArtName: string
   /** Titles (without region tags) a ROM in the library may carry for this game. */
   aliases: string[]
