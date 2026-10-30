@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, Volume2, VolumeX, X, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
@@ -9,6 +9,9 @@ import { TouchControls } from './TouchControls'
 import { InstallPrompt } from './InstallPrompt'
 import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
+import { isHapticStrength, type HapticStrength } from './haptics'
+import { FEATURED_GAMES, findLibraryGame, gbaBoxArtUrl, type FeaturedGame } from './featuredGames'
+import { CoverFlow } from './CoverFlow'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; rom: Uint8Array; romHash: string; backupType: string }
 type Toast = { id: number; message: string; tone: 'info' | 'error' }
@@ -16,7 +19,6 @@ const TOAST_DURATION_MS = 2500
 type SaveFlushRef = { current: (() => void) | null }
 const DOCS_URL = '/gba-wasm/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
-const GBA_BOX_ART_URL = 'https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 // Display refresh timestamps jitter; a frame due within this margin runs now.
 const FRAME_PACING_TOLERANCE_MS = 2
@@ -42,8 +44,8 @@ type EmulatorSettings = {
   speed: GameSpeed
   touchControls: boolean
   touchTheme: TouchTheme
-  /** Vibrate (or play the iOS system haptic) when an on-screen button is pressed. */
-  haptics: boolean
+  /** How hard to vibrate (or play the iOS system haptic) when an on-screen button is pressed. */
+  haptics: HapticStrength
 }
 
 function isGameSpeed(value: unknown): value is GameSpeed {
@@ -51,7 +53,7 @@ function isGameSpeed(value: unknown): value is GameSpeed {
 }
 
 // Touch controls default to on for phones and tablets, where there is usually no keyboard.
-const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm', haptics: true }
+const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm', haptics: 'light' }
 
 /** A running figure in the lucide icon style (lucide has no running-person icon). */
 function RunnerIcon({ size = 24, ...props }: LucideProps) {
@@ -72,6 +74,19 @@ const GAME_SPEED_OPTIONS: { speed: GameSpeed; label: string; Icon: (props: Lucid
   { speed: 'superFast', label: 'Super', Icon: Rocket },
 ]
 
+const HAPTIC_OPTIONS: { strength: HapticStrength; label: string; Icon: (props: LucideProps) => React.ReactNode }[] = [
+  { strength: 'off', label: 'None', Icon: VibrateOff },
+  { strength: 'light', label: 'Light', Icon: Feather },
+  { strength: 'hard', label: 'Hard', Icon: Zap },
+]
+
+/** Reads the stored haptic setting; older versions stored it as an on/off boolean. */
+function readHapticStrength(value: unknown): HapticStrength {
+  if (isHapticStrength(value)) return value
+  if (typeof value === 'boolean') return value ? 'light' : 'off'
+  return DEFAULT_SETTINGS.haptics
+}
+
 function readSettings(): EmulatorSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_STORAGE_KEY)
@@ -86,7 +101,7 @@ function readSettings(): EmulatorSettings {
         speed: isGameSpeed(values.speed) ? values.speed : DEFAULT_SETTINGS.speed,
         touchControls: 'touchControls' in values ? Boolean(values.touchControls) : DEFAULT_SETTINGS.touchControls,
         touchTheme: isTouchTheme(values.touchTheme) ? values.touchTheme : DEFAULT_SETTINGS.touchTheme,
-        haptics: 'haptics' in values ? Boolean(values.haptics) : DEFAULT_SETTINGS.haptics,
+        haptics: readHapticStrength(values.haptics),
       }
     }
   } catch {
@@ -124,10 +139,6 @@ function describeError(error: unknown) {
   } catch {
     return { message: String(error), stack: undefined }
   }
-}
-
-function gbaBoxArtUrl(name: string) {
-  return `${GBA_BOX_ART_URL}${encodeURIComponent(name)}.png`
 }
 
 function GithubMark() {
@@ -316,6 +327,13 @@ function App() {
     navigate('/play')
     inputRef.current?.click()
   }
+  /** Boots a featured cartridge from the library, or asks for its ROM when it has never been loaded. */
+  function quickStart(featured: FeaturedGame) {
+    const saved = findLibraryGame(featured, savedGames)
+    if (saved) void resumeGame(saved)
+    else triggerLoad()
+  }
+
   // While a game is played with touch controls, phones drop the site chrome (see `.touch-play` in App.css).
   const touchPlay = Boolean(activeGame) && settings.touchControls && pathname === '/play'
   return (
@@ -336,10 +354,10 @@ function App() {
       </header>
       <main>
         <Routes>
-          <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
+          <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
           <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} onRestart={restartGame} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
-          <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} />} />
+          <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
         </Routes>
       </main>
       <footer className="site-footer">
@@ -353,7 +371,7 @@ function App() {
   )
 }
 
-function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; onLoad: () => void; onResume: (game: SavedGame) => void }) {
+function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: SavedGame[]; onLoad: () => void; onResume: (game: SavedGame) => void; onQuickStart: (game: FeaturedGame) => void }) {
   return (
     <div className="home-page">
       <section className="hero-section">
@@ -385,6 +403,10 @@ function HomePage({ savedGames, onLoad, onResume }: { savedGames: SavedGame[]; o
             </div>
           </div>
         </div>
+      </section>
+      <section className="library-strip quick-start">
+        <div className="section-heading"><div><p className="eyebrow">QUICK START</p><h2>Featured cartridges</h2></div></div>
+        <CoverFlow games={FEATURED_GAMES} isInLibrary={(game) => Boolean(findLibraryGame(game, savedGames))} onLaunch={onQuickStart} />
       </section>
       <section className="library-strip">
         <div className="section-heading"><div><p className="eyebrow">YOUR LIBRARY</p><h2>Recently played</h2></div><Link to="/saved-games" className="text-link">View library <ChevronRight size={16} /></Link></div>
@@ -804,7 +826,16 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             </div>
           </div>
           <label className="setting-row"><span><strong>Touch controls</strong><small>Show on-screen GBA buttons below the game.</small></span><input type="checkbox" checked={settings.touchControls} onChange={(event) => onSettingsChange({ ...settings, touchControls: event.target.checked })} /></label>
-          <label className="setting-row"><span><strong>Haptic feedback</strong><small>Feel a tick when you press an on-screen button.</small></span><input type="checkbox" checked={settings.haptics} onChange={(event) => onSettingsChange({ ...settings, haptics: event.target.checked })} /></label>
+          <div className="setting-row setting-column">
+            <span id="haptics-label"><strong>Haptic feedback</strong><small>Feel a tick when you press an on-screen button. The D-pad never ticks.</small></span>
+            <div className="speed-options haptic-options" role="radiogroup" aria-labelledby="haptics-label">
+              {HAPTIC_OPTIONS.map(({ strength, label, Icon }) => (
+                <button key={strength} type="button" role="radio" aria-checked={settings.haptics === strength} className={settings.haptics === strength ? 'speed-option active' : 'speed-option'} onClick={() => onSettingsChange({ ...settings, haptics: strength })}>
+                  <Icon size={22} aria-hidden="true" /><span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="setting-row setting-column">
             <span id="touch-theme-label"><strong>Theme</strong><small>Colours of the mobile touch controls.</small></span>
             <div className="touch-theme-options" role="radiogroup" aria-labelledby="touch-theme-label">

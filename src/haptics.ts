@@ -9,6 +9,16 @@
 // amplitude. The LRA in phones like the Pixel 8 needs ~20 ms to spin up, so shorter pulses are
 // dropped or imperceptible. Chrome also ignores vibrate() entirely while the ringer is on Silent,
 // and Android scales it by Settings > Vibration & haptics > Touch feedback (off at zero).
+// The Vibration API has no amplitude control, so a harder tick is a longer pulse. iOS offers a
+// single system haptic, so light and hard feel the same there.
+
+export type HapticStrength = 'off' | 'light' | 'hard'
+
+const PULSE_DURATION_MS: Record<Exclude<HapticStrength, 'off'>, number> = { light: 30, hard: 60 }
+
+export function isHapticStrength(value: unknown): value is HapticStrength {
+  return value === 'off' || value === 'light' || value === 'hard'
+}
 
 let iosSwitch: HTMLLabelElement | null = null
 
@@ -28,7 +38,7 @@ function clickIosSwitch() {
 }
 
 /** Plays a short tick for a button press. */
-export function hapticTick() {
-  if (typeof navigator.vibrate === 'function') navigator.vibrate(30)
+export function hapticTick(strength: Exclude<HapticStrength, 'off'>) {
+  if (typeof navigator.vibrate === 'function') navigator.vibrate(PULSE_DURATION_MS[strength])
   else clickIosSwitch()
 }

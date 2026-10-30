@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GBA_KEYS } from './keypad'
 import { TouchControls } from './TouchControls'
+import type { HapticStrength } from './haptics'
 
 vi.mock('./haptics', () => ({ hapticTick: vi.fn() }))
 const { hapticTick } = await import('./haptics')
@@ -63,7 +64,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function render(haptics = false) {
+function render(haptics: HapticStrength = 'off') {
   act(() => root.render(<TouchControls theme="gba-wasm" haptics={haptics} onChange={onChange} />))
   return container.querySelector<HTMLElement>('.touch-controls')!
 }
@@ -184,13 +185,14 @@ describe('TouchControls', () => {
   })
 
   it('ticks for button presses but not the D-pad', () => {
-    render(true)
+    render('light')
     const dpad = center('dpad')
     pointer('pointerdown', 1, { x: dpad.x + 30, y: dpad.y })
     pointer('pointermove', 1, { x: dpad.x + 30, y: dpad.y - 30 })
     expect(hapticTick).not.toHaveBeenCalled()
     pointer('pointerdown', 2, center('A'))
     expect(hapticTick).toHaveBeenCalledTimes(1)
+    expect(hapticTick).toHaveBeenCalledWith('light')
     pointer('pointermove', 2, center('B'))
     expect(hapticTick).toHaveBeenCalledTimes(2)
     // Releases do not tick.
@@ -199,8 +201,14 @@ describe('TouchControls', () => {
     expect(hapticTick).toHaveBeenCalledTimes(2)
   })
 
+  it('passes the chosen strength to the tick', () => {
+    render('hard')
+    pointer('pointerdown', 1, center('A'))
+    expect(hapticTick).toHaveBeenCalledWith('hard')
+  })
+
   it('does not tick when haptics are off', () => {
-    render(false)
+    render('off')
     pointer('pointerdown', 1, center('A'))
     expect(hapticTick).not.toHaveBeenCalled()
   })

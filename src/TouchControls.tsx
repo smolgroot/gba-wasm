@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { GBA_KEYS, dpadMaskForVector } from './keypad'
 import type { TouchTheme } from './touchThemes'
-import { hapticTick } from './haptics'
+import { hapticTick, type HapticStrength } from './haptics'
 
 const DPAD = 'dpad'
 const DPAD_DIRECTIONS = GBA_KEYS.UP | GBA_KEYS.DOWN | GBA_KEYS.LEFT | GBA_KEYS.RIGHT
@@ -52,7 +52,7 @@ function updatePointer(pointer: TrackedPointer, x: number, y: number) {
  * On-screen GBA buttons. Every pointer is tracked separately and re-hit-tested on move, so a
  * finger can slide between buttons without lifting, and steer the D-pad like a joystick.
  */
-export function TouchControls({ theme, haptics, onChange }: { theme: TouchTheme; haptics: boolean; onChange: (pressed: number) => void }) {
+export function TouchControls({ theme, haptics, onChange }: { theme: TouchTheme; haptics: HapticStrength; onChange: (pressed: number) => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const onChangeRef = useRef(onChange)
   const hapticsRef = useRef(haptics)
@@ -69,7 +69,8 @@ export function TouchControls({ theme, haptics, onChange }: { theme: TouchTheme;
       if (mask === reported) return
       const pressed = mask & ~reported
       // Tick for newly pressed buttons only: D-pad directions change too often while steering.
-      if ((pressed & ~DPAD_DIRECTIONS) !== 0 && hapticsRef.current) hapticTick()
+      const strength = hapticsRef.current
+      if ((pressed & ~DPAD_DIRECTIONS) !== 0 && strength !== 'off') hapticTick(strength)
       reported = mask
       root.querySelectorAll<HTMLElement>('[data-gba]').forEach((element) => {
         const key = element.dataset.gba

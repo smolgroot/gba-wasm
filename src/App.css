@@ -78,6 +78,7 @@ main { width: 100%; flex: 1; }
 .recent-game small { margin-top: 6px; color: #8d9386; font: 10px var(--mono); }
 .recent-game > svg { color: #777d70; }
 .recent-game:hover strong, .recent-game:hover > svg { color: var(--violet-light); }
+.quick-start { overflow: hidden; }
 .empty-library { min-height: 85px; display: flex; align-items: center; gap: 13px; padding: 18px; border: 1px dashed #44483c; color: #959a8e; font-size: 13px; }
 .empty-library svg { color: var(--violet); }
 .site-footer { width: min(1240px, calc(100% - 64px)); min-height: 61px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; padding: 13px 0; border-top: 1px solid #34372f; color: #797e73; font: 10px var(--mono); }
@@ -175,7 +176,8 @@ main { width: 100%; flex: 1; }
 [data-touch-theme="oled-silver"] .touch-face-button { box-shadow: inset 0 -3px 6px #0004, 0 0 14px #c9e6ff33, 0 4px 0 var(--touch-face-depth); text-shadow: 0 1px 0 #fff9; }
 [data-touch-theme="oled-silver"].touch-theme-swatch i, [data-touch-theme="oled-silver"].touch-theme-swatch i::after { background: var(--touch-chrome); }
 .touch-theme-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.touch-theme-options .speed-option { min-height: 78px; padding: 8px 4px; text-align: center; font-size: 7px; }
+.touch-theme-options .haptic-options { grid-template-columns: repeat(3, 1fr); }
+.speed-option { min-height: 78px; padding: 8px 4px; text-align: center; font-size: 7px; }
 .touch-theme-swatch { position: relative; width: 52px; height: 30px; border: 1px solid var(--touch-border); border-radius: 6px; background: var(--touch-bg); }
 .touch-theme-swatch i { position: absolute; left: 7px; top: 12px; width: 15px; height: 5px; border-radius: 1px; background: var(--touch-surface); }
 .touch-theme-swatch i::after { content: ""; position: absolute; left: 5px; top: -5px; width: 5px; height: 15px; border-radius: 1px; background: var(--touch-surface); }
@@ -264,14 +266,6 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
   .hero-actions .primary-button, .hero-actions .secondary-button { padding-inline: 12px; font-size: 7px; }
   .hero-links { gap: 17px; margin-top: 25px; }
   .hero-links a { gap: 6px; font-size: 9px; }
-  .console-stage { height: 382px; margin-top: 8px; transform: none; }
-  .console { width: 350px; max-width: 96%; height: 260px; padding: 15px 13px 12px; border-radius: 27px 27px 35px 35px; }
-  .console-body { height: 207px; grid-template-columns: 66px minmax(0, 1fr) 66px; gap: 5px; }
-  .console-screen-frame { height: 151px; padding: 8px; }
-  .console-left-controls { gap: 12px; transform: scale(.72); }
-  .console-right-controls { gap: 14px; transform: scale(.78); }
-  .console-speaker i { height: 27px; }
-  .action-buttons b { width: 31px; height: 31px; }
   .stage-caption { bottom: 11px; left: 18px; }
   .stage-rule { left: 18px; right: 18px; }
   .library-strip { padding: 27px 18px 37px; }
@@ -340,6 +334,12 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
   .has-touch-controls .touch-dpad { width: min(140px, 38dvh); }
   .has-touch-controls .touch-face { width: min(150px, 40dvh); }
   .has-touch-controls .touch-system { position: absolute; left: 0; right: 0; bottom: 10px; }
+}
+
+/* Mobile: the console illustration is a desktop flourish; the hero copy takes the full width. */
+@media (max-width: 620px), (orientation: landscape) and (pointer: coarse) and (max-height: 540px) {
+  .hero-section { min-height: auto; grid-template-columns: 1fr; }
+  .console-stage { display: none; }
 }
 
 /* Toggles the heading actions over the game; only shown in phone landscape below. */
