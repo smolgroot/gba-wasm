@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, HardDrive, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, HardDrive, House, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
-import { deleteSavedGame, getSavedGames, saveGame, type SavedGame } from './savedGames'
+import { deleteSavedGame, getSavedGames, saveGame, updateSavedGameScreenshot, type SavedGame } from './savedGames'
 import { hashRom, loadBackup, loadStates, STATE_SLOTS, storeBackup, storeState, validateSaveFile, type StoredState } from './backupStorage'
 import { attachKeyboard } from './keypad'
 import { TouchControls } from './TouchControls'
@@ -10,7 +10,7 @@ import { InstallPrompt } from './InstallPrompt'
 import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 import { isHapticStrength, type HapticStrength } from './haptics'
-import { FEATURED_GAMES, findLibraryGame, gbaBoxArtUrl, type FeaturedGame } from './featuredGames'
+import { FEATURED_GAMES, buildShowcase, gbaBoxArtUrl, type ShowcaseItem } from './featuredGames'
 import { CoverFlow } from './CoverFlow'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; rom: Uint8Array; romHash: string; backupType: string }
@@ -318,6 +318,14 @@ function App() {
     }
   }
 
+  /** Shows a gameplay frame in the library; a failed update never affects the save itself. */
+  const updateLibraryScreenshot = useCallback((name: string, screenshot: string) => {
+    void updateSavedGameScreenshot(name, screenshot)
+      .then(getSavedGames)
+      .then(setSavedGames)
+      .catch((error: unknown) => console.warn('Could not update the library screenshot', error))
+  }, [])
+
   async function removeGame(id: string) {
     await deleteSavedGame(id)
     setSavedGames(await getSavedGames())
@@ -327,10 +335,9 @@ function App() {
     navigate('/play')
     inputRef.current?.click()
   }
-  /** Boots a featured cartridge from the library, or asks for its ROM when it has never been loaded. */
-  function quickStart(featured: FeaturedGame) {
-    const saved = findLibraryGame(featured, savedGames)
-    if (saved) void resumeGame(saved)
+  /** Boots a cartridge from the library, or asks for its ROM when it has never been loaded here. */
+  function quickStart(item: ShowcaseItem) {
+    if (item.saved) void resumeGame(item.saved)
     else triggerLoad()
   }
 
@@ -355,7 +362,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
-          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} onRestart={restartGame} />} />
+          <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} onRestart={restartGame} onSnapshot={updateLibraryScreenshot} />} />
           <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
         </Routes>
@@ -371,7 +378,7 @@ function App() {
   )
 }
 
-function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: SavedGame[]; onLoad: () => void; onResume: (game: SavedGame) => void; onQuickStart: (game: FeaturedGame) => void }) {
+function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: SavedGame[]; onLoad: () => void; onResume: (game: SavedGame) => void; onQuickStart: (item: ShowcaseItem) => void }) {
   return (
     <div className="home-page">
       <section className="hero-section">
@@ -405,8 +412,8 @@ function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: 
         </div>
       </section>
       <section className="library-strip quick-start">
-        <div className="section-heading"><div><p className="eyebrow">QUICK START</p><h2>Featured cartridges</h2></div></div>
-        <CoverFlow games={FEATURED_GAMES} isInLibrary={(game) => Boolean(findLibraryGame(game, savedGames))} onLaunch={onQuickStart} />
+        <div className="section-heading"><div><p className="eyebrow">QUICK START</p><h2>Cartridges</h2></div></div>
+        <CoverFlow items={buildShowcase(FEATURED_GAMES, savedGames)} onLaunch={onQuickStart} />
       </section>
       <section className="library-strip">
         <div className="section-heading"><div><p className="eyebrow">YOUR LIBRARY</p><h2>Recently played</h2></div><Link to="/saved-games" className="text-link">View library <ChevronRight size={16} /></Link></div>
@@ -423,7 +430,7 @@ function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: 
   )
 }
 
-function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef, onRestart }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef; onRestart: (game: ActiveGame, message: string) => Promise<void> }) {
+function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef, onRestart, onSnapshot }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef; onRestart: (game: ActiveGame, message: string) => Promise<void>; onSnapshot: (name: string, screenshot: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
   const pausedRef = useRef(false)
@@ -471,12 +478,13 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       const data = game.emulator.save_state()
       const screenshot = canvasRef.current?.toDataURL('image/png') ?? ''
       await storeState(game.romHash, slot, data, screenshot)
+      if (screenshot) onSnapshot(game.name, screenshot)
       await refreshStates()
       showToast(`State saved to slot ${slot}`)
     } catch (error) {
       showToast(`Could not save state: ${describeError(error).message}`, 'error')
     }
-  }, [game, refreshStates, showToast])
+  }, [game, refreshStates, showToast, onSnapshot])
 
   const loadStateFromSlot = useCallback(async (slot: number) => {
     if (!game) return
@@ -631,7 +639,12 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       if (!savePending) return
       savePending = false
       const data = game.emulator.backup_data()
-      void storeBackup(game.romHash, game.backupType, data).then(() => showToast('Game saved')).catch((error: unknown) => {
+      // Taken now: the canvas is gone once the page has unmounted.
+      const screenshot = canvasRef.current?.toDataURL('image/png')
+      void storeBackup(game.romHash, game.backupType, data).then(() => {
+        showToast('Game saved')
+        if (screenshot) onSnapshot(game.name, screenshot)
+      }).catch((error: unknown) => {
         showToast(`Could not store save data: ${describeError(error).message}`, 'error')
         onRuntimeError(`Could not store save data: ${describeError(error).message}`)
       })
@@ -661,7 +674,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     return () => {
       if (flushSaveRef.current === close) close()
     }
-  }, [game, flushSaveRef, onRuntimeError, showToast])
+  }, [game, flushSaveRef, onRuntimeError, showToast, onSnapshot])
 
   useEffect(() => {
     const context = canvasRef.current?.getContext('2d')
@@ -743,7 +756,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
 
   return (
     <section className={showActions ? 'emulator-page actions-open' : 'emulator-page'}>
-      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button><Link to="/saved-games" className="secondary-button"><HardDrive size={17} /> Library</Link></div></div>
+      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><Link to="/" className="secondary-button" aria-label="Home" title="Home"><House size={17} /> Home</Link><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button></div></div>
       <div className="emulator-layout">
         <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />

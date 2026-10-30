@@ -39,6 +39,24 @@ export async function saveGame(game: SavedGame) {
   })
 }
 
+/** Replaces the library picture of every entry of this game, for example with a save-state frame. */
+export async function updateSavedGameScreenshot(name: string, screenshot: string) {
+  const database = await openDatabase()
+  return new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(STORE_NAME)
+    const request = store.getAll()
+    request.onsuccess = () => {
+      for (const game of request.result as SavedGame[]) {
+        if (game.name === name) store.put({ ...game, screenshot })
+      }
+    }
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error) }
+    transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error('Updating the library was aborted by the browser.')) }
+  })
+}
+
 export async function deleteSavedGame(id: string) {
   const database = await openDatabase()
   return new Promise<void>((resolve, reject) => {

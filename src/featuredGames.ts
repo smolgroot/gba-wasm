@@ -34,8 +34,37 @@ export function normalizeGameTitle(name: string) {
   return name.replace(/\([^)]*\)|\[[^\]]*\]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
-/** The most recently played library entry for this featured game, if any. Expects `games` newest first, as `getSavedGames` returns them. */
-export function findLibraryGame(featured: FeaturedGame, games: SavedGame[]) {
-  const titles = new Set(featured.aliases.map(normalizeGameTitle))
-  return games.find((game) => titles.has(normalizeGameTitle(game.name)))
+/** A ROM file name without its region/revision tags, for display. */
+export function displayGameTitle(name: string) {
+  return name.replace(/\s*(\([^)]*\)|\[[^\]]*\])/g, '').trim() || name
+}
+
+/** One cover in the home page cover flow. */
+export type ShowcaseItem = {
+  id: string
+  title: string
+  /** Set for known cartridges, which have a bundled cover. */
+  featured?: FeaturedGame
+  /** Most recent library entry for this game; absent for featured cartridges never loaded on this device. */
+  saved?: SavedGame
+}
+
+/**
+ * Every game in the library, newest first and one cover per game, followed by the featured cartridges never
+ * played here. Expects `games` newest first, as `getSavedGames` returns them.
+ */
+export function buildShowcase(featured: FeaturedGame[], games: SavedGame[]): ShowcaseItem[] {
+  const featuredByTitle = new Map(featured.flatMap((game) => game.aliases.map((alias) => [normalizeGameTitle(alias), game] as const)))
+  const seen = new Set<string>()
+  const played: ShowcaseItem[] = []
+  for (const game of games) {
+    const title = normalizeGameTitle(game.name)
+    const match = featuredByTitle.get(title)
+    const id = match?.id ?? `saved:${title || game.id}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    played.push({ id, title: match?.title ?? displayGameTitle(game.name), featured: match, saved: game })
+  }
+  const unplayed = featured.filter((game) => !seen.has(game.id)).map((game) => ({ id: game.id, title: game.title, featured: game }))
+  return [...played, ...unplayed]
 }
