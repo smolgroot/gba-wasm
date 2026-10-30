@@ -1601,6 +1601,10 @@ impl ThumbCpu {
             flags & (1 << 6) != 0,
             flags & (1 << 7) != 0,
         );
+        // The hardware BIOS always leaves the screen in forced blank, whatever the flags.
+        // Games rely on it: Pokémon FireRed's boot only writes DISPSTAT (and so enables the
+        // VCount IRQ that drives its sound DMA) directly while forced blank is on.
+        memory.write_u16(crate::memory::DISPCNT_ADDR, 0x0080);
     }
 
     fn cpu_set(&self, memory: &mut MemoryMap) {
@@ -2687,6 +2691,7 @@ mod tests {
             expected_io[offset] = 0x01; // BG2/BG3 affine PA and PD = 1.0
         }
         expected_io[0x089] = 0x02; // SOUNDBIAS = 0x200
+        expected_io[0x000] = 0x80; // DISPCNT forced blank
         assert_eq!(memory.io, expected_io);
     }
 
@@ -3081,12 +3086,17 @@ mod tests {
 
         cpu.step(&mut memory).unwrap();
         assert_eq!(memory.io[0x128..0x12A], [0, 0]);
-        assert_eq!(memory.read_u16(crate::memory::DISPCNT_ADDR), 0x1900);
+        assert_eq!(
+            memory.read_u16(crate::memory::DISPCNT_ADDR),
+            0x0080,
+            "every reset forces blank"
+        );
         assert_eq!(memory.io[0x080..0x082], [0x34, 0x12]);
 
+        memory.write_u16(crate::memory::DISPCNT_ADDR, 0x1900);
         cpu.registers[0] = 1 << 7; // other registers
         cpu.step(&mut memory).unwrap();
-        assert_eq!(memory.read_u16(crate::memory::DISPCNT_ADDR), 0);
+        assert_eq!(memory.read_u16(crate::memory::DISPCNT_ADDR), 0x0080);
         assert_eq!(
             memory.io[0x080..0x082],
             [0x34, 0x12],
