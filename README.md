@@ -17,4 +17,14 @@
 
 <hr />
 
-> **Note:** This project is in early development. The emulator core is not yet complete, and the browser shell is a work in progress. The current milestone focuses on the memory model and GPU framebuffer.
+> **Note:** This project is in active development. The CPU passes the jsmolka/gba-tests ARM, Thumb, and memory suites, and the core renders all display modes, plays audio, and emulates cartridge saves, but accuracy varies by game. See [TASKS.md](TASKS.md) for what is missing.
+
+## Documentation
+
+The [documentation](https://smolgroot.github.io/gba-wasm/docs/) (source in [`doc/`](doc/)) includes a **User Manual** (saves, settings, mobile and desktop play, controls) and the architecture of the Rust core.
+
+```sh
+pnpm install
+pnpm dev        # build the WASM core and start the app
+pnpm docs:dev   # serve the documentation
+```

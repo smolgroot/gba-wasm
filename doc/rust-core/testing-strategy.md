@@ -11,7 +11,7 @@ The Rust core follows a small, explicit testing strategy tuned for emulator work
 
 ## Current coverage
 
-Unit tests live next to the code in `rust/src`. They cover the memory map, I/O devices (display status, interrupts, timers, keypad, DMA), CPU instructions and ARM7TDMI edge cases, IRQ entry and return through the HLE BIOS, BIOS services, cartridge header validation, and the bitmap renderers.
+Unit tests live next to the code in `rust/src`. They cover the memory map, I/O devices (display status, interrupts, timers, keypad, DMA), CPU instructions and ARM7TDMI edge cases, IRQ entry and return through the [HLE BIOS](./bios.md), BIOS services, cartridge header validation and backup memory, the renderers ([GPU Core](./gpu-core.md#test-coverage)), the APU, and save-state round trips.
 
 Two generated fixtures in `rust/src/lib.rs` exercise the boot path. `generated_arm_mode3_startup_fixture` branches past the header, writes a red Mode 3 pixel, and enables BG2. The halt fixture checks that `SWI Halt` wakes on the exact VBlank request.
 
@@ -31,7 +31,7 @@ GBA_FUZZ_SCALE=50 RUSTFLAGS="-C overflow-checks=on" cargo test --release --test 
 
 ## Frontend tests
 
-`pnpm test` runs Vitest in jsdom over `src/**/*.test.{ts,tsx}`: keyboard and touch input, and the audio worklet and output lifecycle.
+`pnpm test` runs Vitest in jsdom over `src/**/*.test.{ts,tsx}`: keyboard and touch input (`keypad.test.ts`, `TouchControls.test.tsx`), the audio worklet and output lifecycle (`audio.test.ts`), and the home page cover flow (`coverFlowMotion.test.ts` for the scrolling physics, `featuredGames.test.ts` for matching library ROMs to featured cartridges).
 
 ## Commercial ROMs
 

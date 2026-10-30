@@ -12,13 +12,24 @@ export default defineConfig({
   themeConfig: {
     logo: '/logo.png',
     nav: [
+      { text: 'User Manual', link: '/manual/' },
       { text: 'Guide', link: '/guide/introduction' },
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'Rust Core', link: '/rust-core/memory-map' },
     ],
     sidebar: [
       {
-        text: 'Getting Started',
+        text: 'User Manual',
+        items: [
+          { text: 'Getting Started', link: '/manual/' },
+          { text: 'Saved Games', link: '/manual/saves' },
+          { text: 'Settings', link: '/manual/settings' },
+          { text: 'Desktop and Mobile Play', link: '/manual/play-modes' },
+          { text: 'Controls and Shortcuts', link: '/manual/controls' },
+        ],
+      },
+      {
+        text: 'Development',
         items: [
           { text: 'Introduction', link: '/guide/introduction' },
           { text: 'Project Goals', link: '/guide/goals' },
@@ -39,12 +50,13 @@ export default defineConfig({
         items: [
           { text: 'Memory Map', link: '/rust-core/memory-map' },
           { text: 'ARM7TDMI CPU', link: '/rust-core/thumb-cpu' },
+          { text: 'HLE BIOS', link: '/rust-core/bios' },
           { text: 'GPU Core', link: '/rust-core/gpu-core' },
           { text: 'Audio (APU)', link: '/rust-core/apu' },
           { text: 'Testing Strategy', link: '/rust-core/testing-strategy' },
         ],
       },
     ],
-    socialLinks: [{ icon: 'github', link: 'https://github.com' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/smolgroot/gba-wasm' }],
   },
 })

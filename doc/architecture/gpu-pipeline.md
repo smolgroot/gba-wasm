@@ -1,18 +1,19 @@
 # GPU Pipeline
 
-The current GPU milestone implements GBA Mode 3: a 240 x 160 bitmap with 16-bit RGB555 pixels stored in VRAM. This provides a deterministic first rendering path before adding tile, background, and object modes.
+Video flows in one direction: the CPU and DMA write emulated VRAM, palette RAM, OAM, and display registers; the Rust renderer turns that state into RGBA pixels; the browser copies the pixels to a canvas.
 
-## Current representation
+## In the core
 
-The `GpuCore` stores a `framebuffer` of RGBA pixel data with dimensions matching the GBA screen: 240 x 160.
+`GbaCore::step_frame` renders each visible line once the display reaches that line's HBlank, then returns the 240 x 160 RGBA frame (`SCREEN_WIDTH * SCREEN_HEIGHT * 4` bytes) when VBlank starts. Changes made between lines, by HBlank interrupts or HBlank DMA, affect the following lines as on hardware.
 
-## Capabilities
+The renderer supports every display mode: text and affine backgrounds (modes 0-2), the three bitmap modes (3-5), objects, windows, and color effects. The details and the features that are not modeled are in [GPU Core](../rust-core/gpu-core.md).
 
-- clear the framebuffer
-- set a single pixel
-- decode RGB555 pixels from VRAM
-- expose RGBA framebuffer bytes to the browser through WebAssembly
+## In the browser
+
+`step_frame` returns the frame as bytes. The emulator page wraps them in an `ImageData` and draws them with `putImageData` on a 240 x 160 canvas, which CSS scales to the screen. When several frames run in one display refresh (at Fast or Super speed), only the last one is drawn ([Frame loop](./wasm-boundary.md#frame-loop)).
+
+`WasmEmulator::frame()` returns the current frame without stepping, so the page can redraw after loading a save state, even while paused. Save-state slots and the library store PNG screenshots taken from the canvas.
 
 ## Design intent
 
-The GPU model intentionally stays close to the raw framebuffer instead of embedding browser logic. This makes the Rust implementation testable and reusable when the full GBA pipeline is implemented.
+The renderer stays close to the hardware model and has no browser logic. This keeps it testable with pixel assertions in Rust and lets the browser treat video as plain bytes.

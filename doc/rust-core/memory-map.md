@@ -1,12 +1,12 @@
 # Memory Map
 
-The first milestone defines the addressable memory layout used by the emulator core.
+`MemoryMap` (`rust/src/memory.rs`) decodes every CPU and DMA access to the GBA's memory regions, I/O registers, and cartridge.
 
 ## Regions
 
 | Region | Size | Purpose |
 | --- | --- | --- |
-| BIOS | 16 KiB | generated HLE image at `0x00000000` (vectors and IRQ dispatcher; see [ARM7TDMI CPU](./thumb-cpu.md)) |
+| BIOS | 16 KiB | generated HLE image at `0x00000000` (vectors and IRQ dispatcher; see [HLE BIOS](./bios.md)) |
 | EWRAM | 256 KiB | external work RAM |
 | IWRAM | 32 KiB | internal work RAM |
 | VRAM | 96 KiB | video memory |

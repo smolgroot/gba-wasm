@@ -106,7 +106,7 @@ Acceptance criteria:
 - Implement only the BIOS services required by the selected homebrew fixture and return explicit errors for unsupported services.
 - Verify the fixture reaches its documented entry/checkpoint with each supported boot path.
 
-HLE-only boot is documented in [ARM7TDMI CPU](doc/rust-core/thumb-cpu.md#boot-contract). The jsmolka/gba-tests ROMs reach their idle-loop checkpoint through it.
+HLE-only boot is documented in [HLE BIOS](doc/rust-core/bios.md#boot-contract). The jsmolka/gba-tests ROMs reach their idle-loop checkpoint through it.
 
 ### BUS-01: Implement hardware-visible memory and I/O behavior
 
@@ -206,7 +206,7 @@ Acceptance criteria:
 - Browser work is scheduled in bounded frame batches and does not block input for long intervals.
 - Tests cover pause/resume state and repeated frame-step requests.
 
-Pause is a button and the `P` key. The frame loop runs at most one frame per animation frame, at 59.73 fps (see [WASM Boundary](doc/architecture/wasm-boundary.md#frame-loop)). Rust tests show a paused-and-resumed run matches an uninterrupted one frame for frame, and that each `step_frame` ends at the next VBlank. A headless Chrome check confirmed the frame stays frozen while paused and resumes afterwards.
+Pause is a button and the `P` key. The frame loop runs the frames that are due at each animation frame (at most six), averaging 59.73 fps times the game speed (see [WASM Boundary](doc/architecture/wasm-boundary.md#frame-loop)). Rust tests show a paused-and-resumed run matches an uninterrupted one frame for frame, and that each `step_frame` ends at the next VBlank. A headless Chrome check confirmed the frame stays frozen while paused and resumes afterwards.
 
 ### INPUT-01: Map keyboard and touch controls
 
@@ -284,7 +284,7 @@ Acceptance criteria:
 - Deliver interrupt requests through CPU exception state with tested priority and return behavior.
 - Add deterministic tests for transfers, trigger conditions, and interrupt entry/return.
 
-Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatcher are implemented and tested. Remaining: sound FIFO and video capture timing, and validation against selected target ROMs.
+Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatcher are implemented and tested. Sound FIFO DMA is implemented ([Audio](doc/rust-core/apu.md)). Remaining: video capture timing and validation against selected target ROMs.
 
 ### AUDIO-01: Implement GBA audio output
 
