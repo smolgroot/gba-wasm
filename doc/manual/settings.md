@@ -19,6 +19,19 @@ When off, every game starts with a two-second Pecten boot animation: the logo sp
 
 Sound plays at the same speed as the game, so its pitch rises at Fast and Super and drops at Slow. On slower devices, Super may not reach four times normal speed.
 
+## Shaders
+
+Effects that make the picture look like the Game Boy Advance's own LCD screen:
+
+| Option | Effect |
+| --- | --- |
+| Off | the raw pixels, as the console renders them |
+| Colour | softer, less saturated colours, as on the GBA's unlit screen that games were coloured for |
+| LCD | Colour, plus the thin dark grid between the screen's pixels |
+| LCD + Blur | LCD, plus each frame blended with the previous one, like the screen's slow response |
+
+The blur also smooths the flicker some games use for transparency, such as Golden Sun's Psynergy effects. The grid fades out when the game is shown too small for the lines to be drawn sharply. Shaders need WebGL2; without it the game shows the raw pixels. Screenshots in the library and save slots are always the raw pixels.
+
 ## Sound
 
 The speaker button mutes and unmutes the game; the slider sets the volume. Browsers only allow sound after you interact with the page, so audio starts on your first key press, click, or tap.

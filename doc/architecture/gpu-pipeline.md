@@ -12,7 +12,9 @@ The renderer supports every display mode: text and affine backgrounds (modes 0-2
 
 `step_frame` returns the frame as bytes. The emulator page wraps them in an `ImageData` and draws them with `putImageData` on a 240 x 160 canvas, which CSS scales to the screen. When several frames run in one display refresh (at Fast or Super speed), only the last one is drawn ([Frame loop](./wasm-boundary.md#frame-loop)).
 
-`WasmEmulator::frame()` returns the current frame without stepping, so the page can redraw after loading a save state, even while paused. Save-state slots and the library store PNG screenshots taken from the canvas.
+With a [shader](../manual/settings.md#shaders) selected, `src/screenShaders.ts` draws the frame with WebGL2 instead, on a canvas sized to the display in device pixels: one fragment pass applies GBA LCD colour correction, the pixel grid, and blending with the previous frame. The canvas is replaced when switching between the 2D and WebGL paths, since a canvas keeps its first context type.
+
+`WasmEmulator::frame()` returns the current frame without stepping, so the page can redraw after loading a save state, even while paused. Save-state slots and the library store PNG screenshots of the raw frame, so they do not depend on the shader.
 
 ## Design intent
 

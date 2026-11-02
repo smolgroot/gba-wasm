@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, HardDrive, House, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, Blend, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, Grid3x3, HardDrive, House, Info, Menu, Palette, Pause, Play, Rabbit, Rocket, Save, Settings, Square, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadPecten, type PectenEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, updateSavedGameScreenshot, type SavedGame } from './savedGames'
@@ -11,6 +11,7 @@ import { InstallPrompt } from './InstallPrompt'
 import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 import { isHapticStrength, type HapticStrength } from './haptics'
+import { createScreenRenderer, isScreenShader, usesWebGl, type ScreenRenderer, type ScreenShader } from './screenShaders'
 import { FEATURED_GAMES, buildShowcase, gbaBoxArtUrl, type ShowcaseItem } from './featuredGames'
 import { CoverFlow } from './CoverFlow'
 
@@ -50,6 +51,8 @@ type EmulatorSettings = {
   touchTheme: TouchTheme
   /** How hard to vibrate (or play the iOS system haptic) when an on-screen button is pressed. */
   haptics: HapticStrength
+  /** Presentation effects applied to the game screen. */
+  shader: ScreenShader
 }
 
 function isGameSpeed(value: unknown): value is GameSpeed {
@@ -57,7 +60,7 @@ function isGameSpeed(value: unknown): value is GameSpeed {
 }
 
 // Touch controls default to on for phones and tablets, where there is usually no keyboard.
-const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm', haptics: 'light' }
+const DEFAULT_SETTINGS: EmulatorSettings = { skipStartupSplash: false, sound: true, volume: 0.8, speed: 'normal', touchControls: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, touchTheme: 'gba-wasm', haptics: 'light', shader: 'off' }
 
 /** A running figure in the lucide icon style (lucide has no running-person icon). */
 function RunnerIcon({ size = 24, ...props }: LucideProps) {
@@ -84,6 +87,13 @@ const HAPTIC_OPTIONS: { strength: HapticStrength; label: string; Icon: (props: L
   { strength: 'hard', label: 'Hard', Icon: Zap },
 ]
 
+const SHADER_OPTIONS: { shader: ScreenShader; label: string; Icon: (props: LucideProps) => React.ReactNode }[] = [
+  { shader: 'off', label: 'Off', Icon: Square },
+  { shader: 'color', label: 'Colour', Icon: Palette },
+  { shader: 'lcd', label: 'LCD', Icon: Grid3x3 },
+  { shader: 'lcdBlur', label: 'LCD + Blur', Icon: Blend },
+]
+
 /** Reads the stored haptic setting; older versions stored it as an on/off boolean. */
 function readHapticStrength(value: unknown): HapticStrength {
   if (isHapticStrength(value)) return value
@@ -106,6 +116,7 @@ function readSettings(): EmulatorSettings {
         touchControls: 'touchControls' in values ? Boolean(values.touchControls) : DEFAULT_SETTINGS.touchControls,
         touchTheme: isTouchTheme(values.touchTheme) ? values.touchTheme : DEFAULT_SETTINGS.touchTheme,
         haptics: readHapticStrength(values.haptics),
+        shader: isScreenShader(values.shader) ? values.shader : DEFAULT_SETTINGS.shader,
       }
     }
   } catch {
@@ -452,6 +463,7 @@ function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: 
 
 function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLoad, onRuntimeError, flushSaveRef, onRestart, onSnapshot }: { game: ActiveGame | null; status: string; errorLog: string | null; settings: EmulatorSettings; onSettingsChange: (settings: EmulatorSettings) => void; onLoad: () => void; onRuntimeError: (status: string) => void; flushSaveRef: SaveFlushRef; onRestart: (game: ActiveGame, message: string) => Promise<void>; onSnapshot: (name: string, screenshot: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const rendererRef = useRef<ScreenRenderer | null>(null)
   // The frame loop reads the ref, so pausing does not restart (and repaint) the loop.
   const pausedRef = useRef(false)
   const audioRef = useRef<AudioOutput | null>(null)
@@ -502,7 +514,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     if (!game) return
     try {
       const data = game.emulator.save_state()
-      const screenshot = canvasRef.current?.toDataURL('image/png') ?? ''
+      const screenshot = canvasRef.current ? fileToImage(game.emulator.frame()) : ''
       await storeState(game.romHash, slot, data, screenshot)
       if (screenshot) onSnapshot(game.name, screenshot)
       await refreshStates()
@@ -523,7 +535,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       game.emulator.load_state(new Uint8Array(record.data))
       // Drop audio generated before the load and show the restored frame, even while paused.
       game.emulator.take_audio_samples()
-      canvasRef.current?.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(game.emulator.frame()), 240, 160), 0, 0)
+      rendererRef.current?.draw(game.emulator.frame())
       showToast(`State loaded from slot ${slot}`)
     } catch (error) {
       showToast(`Could not load state: ${describeError(error).message}`, 'error')
@@ -630,7 +642,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         return
       }
       // The canvas is gone once the page has unmounted; the snapshot does not need a screenshot.
-      const screenshot = canvasRef.current?.toDataURL('image/png') ?? ''
+      const screenshot = canvasRef.current ? fileToImage(game.emulator.frame()) : ''
       void storeState(game.romHash, SUSPEND_SLOT, data, screenshot).then(() => {
         if (screenshot) onSnapshot(game.name, screenshot)
       }).catch((error: unknown) => console.warn('Could not store where play stopped', error))
@@ -724,7 +736,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       savePending = false
       const data = game.emulator.backup_data()
       // Taken now: the canvas is gone once the page has unmounted.
-      const screenshot = canvasRef.current?.toDataURL('image/png')
+      const screenshot = canvasRef.current ? fileToImage(game.emulator.frame()) : undefined
       void storeBackup(game.romHash, game.backupType, data).then(() => {
         showToast('Game saved')
         if (screenshot) onSnapshot(game.name, screenshot)
@@ -766,11 +778,22 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     }
   }, [game, flushSaveRef, onRuntimeError, showToast, onSnapshot])
 
+  // Recreated when the shader changes; the current frame is redrawn so the change shows while paused.
   useEffect(() => {
-    const context = canvasRef.current?.getContext('2d')
-    if (!game || !context) return
+    const canvas = canvasRef.current
+    if (!game || !canvas) return
+    const renderer = createScreenRenderer(canvas, settings.shader)
+    rendererRef.current = renderer
+    renderer.draw(game.emulator.frame())
+    return () => {
+      if (rendererRef.current === renderer) rendererRef.current = null
+      renderer.dispose()
+    }
+  }, [game, settings.shader])
 
-    context.putImageData(new ImageData(new Uint8ClampedArray(game.pixels), 240, 160), 0, 0)
+  useEffect(() => {
+    if (!game) return
+
     let animationFrame = 0
     let running = true
     let nextFrameAt: number | null = null
@@ -803,7 +826,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
           return
         }
         if (pixels) {
-          context.putImageData(new ImageData(new Uint8ClampedArray(pixels), 240, 160), 0, 0)
+          rendererRef.current?.draw(pixels)
           if (hasVisibleVideo(pixels)) {
             blankFrameCountRef.current = 0
             setHasVideo(true)
@@ -849,7 +872,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><button className="secondary-button" onClick={requestLeave} aria-label="Home" title="Home"><House size={17} /> Home</button><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button></div></div>
       <div className="emulator-layout">
         <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`}>
-          <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
+          <div className="screen-well"><canvas key={usesWebGl(settings.shader) ? 'webgl' : '2d'} ref={canvasRef} width={240} height={160} />
             {!runtimeError && paused && <button className="emulation-notice paused-notice" onClick={togglePause}><strong>Paused</strong><span>Press P or click to resume.</span></button>}
             {runtimeError &&<div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
             {!runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
@@ -923,6 +946,16 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
             <div className="speed-options" role="radiogroup" aria-labelledby="speed-label">
               {GAME_SPEED_OPTIONS.map(({ speed, label, Icon }) => (
                 <button key={speed} type="button" role="radio" aria-checked={settings.speed === speed} className={settings.speed === speed ? 'speed-option active' : 'speed-option'} onClick={() => onSettingsChange({ ...settings, speed })}>
+                  <Icon size={22} aria-hidden="true" /><span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="setting-row setting-column">
+            <span id="shader-label"><strong>Shaders</strong><small>LCD colours, pixel grid and motion blur, like playing on the real screen.</small></span>
+            <div className="speed-options" role="radiogroup" aria-labelledby="shader-label">
+              {SHADER_OPTIONS.map(({ shader, label, Icon }) => (
+                <button key={shader} type="button" role="radio" aria-checked={settings.shader === shader} className={settings.shader === shader ? 'speed-option active' : 'speed-option'} onClick={() => onSettingsChange({ ...settings, shader })}>
                   <Icon size={22} aria-hidden="true" /><span>{label}</span>
                 </button>
               ))}
