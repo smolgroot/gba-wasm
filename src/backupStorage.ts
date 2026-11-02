@@ -8,6 +8,8 @@ const STORE_NAME = 'backups'
 const STATE_STORE_NAME = 'states'
 const RECORD_VERSION = 1
 export const STATE_SLOTS = [1, 2, 3] as const
+/** Written automatically when play stops; kept out of `STATE_SLOTS`, so the Saves dialog never lists it. */
+export const SUSPEND_SLOT = 0
 
 export type StoredBackup = {
   version: typeof RECORD_VERSION
@@ -141,6 +143,28 @@ export async function storeState(romHash: string, slot: number, data: Uint8Array
     transaction.onabort = () => reject(transaction.error ?? new Error('Saving was aborted by the browser.'))
   }).finally(() => database.close())
   return record
+}
+
+/** The automatic snapshot of where play last stopped, or null when there is none or it is unreadable. */
+export async function loadSuspendState(romHash: string): Promise<StoredState | null> {
+  const database = await openDatabase()
+  const record = await new Promise<unknown>((resolve, reject) => {
+    const request = database.transaction(STATE_STORE_NAME, 'readonly').objectStore(STATE_STORE_NAME).get(`${romHash}:${SUSPEND_SLOT}`)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  }).finally(() => database.close())
+  return isStoredState(record) && record.slot === SUSPEND_SLOT ? record : null
+}
+
+export async function deleteSuspendState(romHash: string) {
+  const database = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STATE_STORE_NAME, 'readwrite')
+    transaction.objectStore(STATE_STORE_NAME).delete(`${romHash}:${SUSPEND_SLOT}`)
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () => reject(transaction.error ?? new Error('Deleting was aborted by the browser.'))
+  }).finally(() => database.close())
 }
 
 /** Accepts a `.sav` file when its size fits the cartridge's save memory. */

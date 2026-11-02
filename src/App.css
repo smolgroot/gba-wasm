@@ -128,11 +128,6 @@ main { width: 100%; flex: 1; }
 .paused-notice { border: 0; cursor: pointer; background: #11130fcc; }
 .secondary-button:disabled { opacity: .45; cursor: not-allowed; }
 .secondary-button:disabled:hover { border-color: #4a4e43; color: #e2e3dc; }
-.startup-splash { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 16px; border: 0; background: radial-gradient(ellipse at center, #49375d, #211d29 73%); color: #e8d7fa; cursor: pointer; }
-.startup-splash img { width: clamp(62px, 11vw, 104px); height: auto; image-rendering: pixelated; filter: drop-shadow(0 4px 0 #17111f); }
-.startup-splash strong { font: 14px/1 var(--pixel); letter-spacing: .03em; }
-.startup-splash strong span { color: var(--violet); }
-.startup-splash small { color: #c5a9df; font: 10px var(--mono); }
 .secondary-button[aria-pressed="true"] { border-color: var(--violet); color: var(--violet-light); background: #29242f; }
 .touch-controls { display: grid; gap: 18px; overflow: clip; padding: 16px 18px 24px; background: var(--touch-bg); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .touch-controls [data-gba] { display: grid; place-items: center; color: var(--touch-label); font: 9px var(--pixel); transition: background .06s ease, transform .06s ease; }
@@ -398,6 +393,11 @@ kbd { min-width: 29px; padding: 6px; border: 1px solid #4b4f45; color: #d1d4ca; 
 .save-import-confirm { margin-top: 14px; padding: 14px; border: 1px solid #e8c87266; background: #e8c87214; }
 .save-import-confirm p { margin: 0 0 12px; color: #dde0d7; font-size: 12px; line-height: 1.6; }
 .save-import-confirm div { display: flex; flex-wrap: wrap; gap: 8px; }
+.leave-modal > p { margin: 16px 0; color: #dde0d7; font-size: 13px; line-height: 1.6; }
+.leave-actions { display: flex; flex-direction: column; gap: 8px; }
+.leave-actions button { justify-content: center; }
+/* Chrome on Android swipes back through history when the root scroller overscrolls sideways. */
+:root:has(.app-shell.touch-play), body:has(.app-shell.touch-play) { overscroll-behavior: none; }
 .toast { position: fixed; z-index: 20; right: 24px; bottom: 24px; max-width: min(420px, calc(100vw - 32px)); padding: 13px 17px; border: 1px solid var(--violet); background: #20221d; color: #eeefe9; box-shadow: 0 12px 40px #000a; font: 12px/1.6 var(--mono); animation: toast-in .18s ease-out; }
 .toast-error { border-color: #f08a7e; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }

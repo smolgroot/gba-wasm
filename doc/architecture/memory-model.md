@@ -27,5 +27,5 @@ I/O registers are stored in the I/O array with their documented read and write m
 ## Approximations
 
 - Memory wait states and the prefetch buffer are not modeled; instruction timings are estimates ([Timing](../rust-core/thumb-cpu.md#timing)).
-- Unmapped addresses and write-only registers read `0` instead of open-bus values.
-- BIOS read protection is not modeled.
+- Unmapped addresses read the last prefetched opcode (open bus); write-only registers still read `0`.
+- BIOS read protection returns a modeled latch value, which is not saved in save states ([HLE BIOS](../rust-core/bios.md#generated-image)).

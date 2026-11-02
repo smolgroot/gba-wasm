@@ -47,7 +47,7 @@ The on-screen buttons map one to one to the GBA buttons. See [Using the touch co
 | Gesture | Where | Action |
 | --- | --- | --- |
 | Tap the menu button | Landscape play | Show or hide the actions |
-| Tap the splash | Game start | Skip the splash |
+| Tap any GBA button | Boot animation | Skip the animation |
 | Tap the game | While paused | Resume |
 | Drag or swipe | Cover flow | Scroll the covers |
 

@@ -51,6 +51,7 @@ This layout applies to touch screens up to 540 pixels high, which covers phones.
 - **D-pad as a joystick:** once a finger touches the D-pad, the direction follows its angle from the centre, even if it slides past the edge. Diagonals are as easy to hit as straight directions, and a small dead zone in the centre presses nothing. The cross tilts toward the direction you press.
 - Pressed buttons light up, and the [haptic feedback](./settings.md#haptic-feedback) setting adds a vibration.
 - All buttons are released when you switch apps or the screen turns off.
+- The back gesture does not quit the game: it pauses and asks first, and progress is kept either way (see [Resume where you left off](./saves.md#resume-where-you-left-off)).
 
 ## Tips for phones
 

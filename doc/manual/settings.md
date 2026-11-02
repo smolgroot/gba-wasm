@@ -4,9 +4,9 @@ Open **Settings** from the button above the game. Changes apply immediately and 
 
 ![The Settings dialog](./images/settings-modal.webp)
 
-## Skip startup splash
+## Skip boot animation
 
-When off, a GBA-WASM logo shows for about two seconds when a game starts. Tap it to skip it. The splash is decoration only; it is not the Game Boy Advance boot animation.
+When off, every game starts with a two-second GBA-WASM boot animation: the logo spins in and the name is typed out. Press any GBA button (keyboard or touch) to skip it. The emulated console draws it, but it is GBA-WASM's own animation, not the original Game Boy Advance boot sequence. Games resumed from where you left off skip it. See [HLE BIOS](../rust-core/bios.md#boot-animation) for how it works.
 
 ## Game speed
 

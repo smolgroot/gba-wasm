@@ -2118,7 +2118,7 @@ fn lz77_decompress(memory: &MemoryMap, source: u32) -> Option<Vec<u8>> {
 /// Rotation/scale matrix [PA, PB, PC, PD] in 8.8 fixed point. Only the top byte of the
 /// angle is used (256 steps per turn), with sine and cosine in 1.14 fixed point like the
 /// BIOS table; individual values may differ from the hardware table by one unit.
-fn affine_matrix(scale_x: i32, scale_y: i32, angle: u16) -> [i32; 4] {
+pub(crate) fn affine_matrix(scale_x: i32, scale_y: i32, angle: u16) -> [i32; 4] {
     let theta = f64::from(angle >> 8) * std::f64::consts::TAU / 256.0;
     let sine = (theta.sin() * 16384.0).round() as i32;
     let cosine = (theta.cos() * 16384.0).round() as i32;
@@ -2166,7 +2166,7 @@ fn arctan2(x: i32, y: i32) -> u16 {
     angle as u16
 }
 
-fn integer_square_root(value: u32) -> u32 {
+pub(crate) fn integer_square_root(value: u32) -> u32 {
     let mut root = (value as f64).sqrt() as u32;
     while u64::from(root) * u64::from(root) > u64::from(value) {
         root -= 1;

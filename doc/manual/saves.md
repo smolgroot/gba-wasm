@@ -37,6 +37,19 @@ Loading a state never changes the game save. If you load an old state and then s
 Save states can be rejected after an update of GBA-WASM that changes the snapshot format. Keep important progress in a game save too. A rejected state shows an error and leaves the running game untouched.
 :::
 
+## Resume where you left off
+
+Whenever play stops (you leave the game, switch apps, lock the screen, or close the tab), GBA-WASM snapshots the console automatically. The next time you start the same ROM, from the home page, the library, or by loading the file again, it continues from that snapshot instead of booting, and the status bar says **resumed where you left off**.
+
+- The snapshot is kept apart from the three save-state slots and never replaces them.
+- Pressing **Home**, the browser's back button, or the phone's back gesture while playing pauses the game and asks **Leave game?** first:
+  - **Keep playing** closes the question and continues.
+  - **Leave** goes home and keeps the snapshot.
+  - **Leave and restart from the last in-game save** drops the snapshot, so the next start boots from the game save.
+- iPhone's edge swipe and closing an installed app cannot be intercepted. The snapshot is still stored, so nothing since the last in-game save is lost.
+- Importing a `.sav` drops the snapshot, so the imported save is the one the game uses.
+- A snapshot older than the game save is ignored, so it never undoes progress the game already saved.
+
 ## Export a save
 
 **Download .sav** downloads the game save as a raw `.sav` file named after the game. Use it to:

@@ -1,6 +1,8 @@
 mod apu;
 mod backup;
 mod bios;
+mod boot_intro;
+mod boot_logo;
 mod cartridge;
 mod cpu;
 mod gpu;
@@ -19,6 +21,7 @@ pub use memory::{
 };
 pub use state::StateError;
 
+use boot_intro::BootIntro;
 use state::{State, StateReader, StateWriter};
 use std::fmt;
 use wasm_bindgen::prelude::*;
@@ -59,6 +62,8 @@ pub struct GbaCore {
     pub memory: MemoryMap,
     pub gpu: GpuCore,
     pub cpu: ThumbCpu,
+    /// Set while the HLE BIOS boot animation plays; the cartridge has not started yet.
+    boot_intro: Option<BootIntro>,
 }
 
 impl GbaCore {
@@ -67,6 +72,7 @@ impl GbaCore {
             memory: MemoryMap::new(),
             gpu: GpuCore::new(),
             cpu: ThumbCpu::new(ROM_BASE),
+            boot_intro: None,
         }
     }
 
@@ -92,12 +98,52 @@ impl GbaCore {
         self.memory.reset_io_registers();
         self.memory.reset_video_clock();
         self.cpu = ThumbCpu::boot_hle();
+        self.boot_intro = None;
         Ok(())
+    }
+
+    /// Plays the boot animation before the cartridge starts. Call right after `load_rom`
+    /// (backup data may be loaded in between): the animation ends by restoring the
+    /// post-BIOS state that `load_rom` set up.
+    pub fn start_boot_intro(&mut self) {
+        self.boot_intro = Some(BootIntro::new());
+    }
+
+    pub fn boot_intro_active(&self) -> bool {
+        self.boot_intro.is_some()
+    }
+
+    /// Clears what the animation drew and restores the state `load_rom` leaves, so the game
+    /// starts exactly as it would without the animation.
+    fn finish_boot_intro(&mut self) {
+        self.boot_intro = None;
+        self.memory.palette.fill(0);
+        self.memory.vram.fill(0);
+        self.memory.oam.fill(0);
+        self.memory.reset_io_registers();
+        self.memory.reset_video_clock();
+        self.gpu = GpuCore::new();
+    }
+
+    /// Draws one frame of the boot animation, or returns `None` once it has ended.
+    fn step_boot_intro(&mut self) -> Option<Vec<u8>> {
+        let intro = self.boot_intro.as_mut()?;
+        if !intro.draw_next_frame(&mut self.memory) {
+            self.finish_boot_intro();
+            return None;
+        }
+        // Emulated time passes (the sound hardware outputs silence) but the CPU does not run.
+        self.memory.advance_video_cycles(CYCLES_PER_FRAME);
+        self.gpu.render(&self.memory);
+        Some(self.gpu.framebuffer.clone())
     }
 
     pub fn step_frame(&mut self) -> Result<Vec<u8>, GbaError> {
         if self.memory.cartridge.is_empty() {
             return Err(CpuError::EmptyCartridge.into());
+        }
+        if let Some(frame) = self.step_boot_intro() {
+            return Ok(frame);
         }
 
         // A frame ends when the display enters VBlank, after all 160 visible lines.
@@ -141,7 +187,13 @@ impl GbaCore {
 
     /// Snapshots the whole machine except the ROM, the BIOS image, held keys, and the
     /// contents of the cartridge save memory.
+    /// A state saved during the boot animation is the state the cartridge starts from.
     pub fn save_state(&self) -> Vec<u8> {
+        if self.boot_intro.is_some() {
+            let mut started = self.clone();
+            started.finish_boot_intro();
+            return started.save_state();
+        }
         let mut writer = StateWriter::new();
         writer.write_bytes(STATE_MAGIC);
         STATE_VERSION.save(&mut writer);
@@ -180,6 +232,7 @@ impl GbaCore {
         if !reader.is_finished() {
             return Err(StateError::Invalid("trailing data"));
         }
+        restored.boot_intro = None;
         restored.cpu.clear_idle_loop();
         restored.memory.apu.take_samples();
         *self = restored;
@@ -535,11 +588,15 @@ pub struct WasmEmulator {
 
 #[wasm_bindgen]
 impl WasmEmulator {
+    /// With `boot_intro`, the first frames play the HLE BIOS boot animation.
     #[wasm_bindgen(constructor)]
-    pub fn new(rom: &[u8]) -> Result<WasmEmulator, JsValue> {
+    pub fn new(rom: &[u8], boot_intro: bool) -> Result<WasmEmulator, JsValue> {
         let mut core = GbaCore::new();
         core.load_rom(rom)
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        if boot_intro {
+            core.start_boot_intro();
+        }
         Ok(Self { core })
     }
 

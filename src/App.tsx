@@ -3,7 +3,8 @@ import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, 
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, updateSavedGameScreenshot, type SavedGame } from './savedGames'
-import { hashRom, loadBackup, loadStates, STATE_SLOTS, storeBackup, storeState, validateSaveFile, type StoredState } from './backupStorage'
+import { deleteSuspendState, hashRom, loadBackup, loadStates, loadSuspendState, STATE_SLOTS, storeBackup, storeState, SUSPEND_SLOT, validateSaveFile, type StoredState } from './backupStorage'
+import { useLeaveGuard } from './leaveGuard'
 import { attachKeyboard } from './keypad'
 import { TouchControls } from './TouchControls'
 import { InstallPrompt } from './InstallPrompt'
@@ -25,11 +26,13 @@ const FRAME_PACING_TOLERANCE_MS = 2
 // Upper bound on frames run per display refresh, so super-fast mode on a slow display cannot stall input.
 // Leaves headroom above the 4 frames per 60 Hz refresh that super-fast mode needs.
 const MAX_FRAMES_PER_CALLBACK = 6
-const STARTUP_SPLASH_DURATION_MS = 1800
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
 const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT'], ['P', 'PAUSE']]
 // Games write saves over several frames; persist once writes have stopped for this long.
 const SAVE_QUIET_FRAMES = 30
+// The game save and the suspend snapshot are written in the same event when play stops; a game save
+// newer than the snapshot by more than this happened after it, so the snapshot would undo it.
+const SUSPEND_CLOCK_TOLERANCE_MS = 2000
 // Keep in sync with the touch overlay media query in App.css.
 
 type GameSpeed = 'slow' | 'normal' | 'fast' | 'superFast'
@@ -216,26 +219,42 @@ function App() {
     }
   }, [])
 
-  async function executeRom(rom: Uint8Array, name: string) {
+  /** With `resume`, continues from the snapshot taken when this ROM last stopped, if there is one. */
+  async function executeRom(rom: Uint8Array, name: string, resume = false) {
     const wasm = await loadGbaWasm()
     const info = wasm.inspect_rom(rom)
-    const emulator = wasm.create_emulator(rom)
+    // Restoring a suspended state below cancels the boot animation.
+    const emulator = wasm.create_emulator(rom, !settings.skipStartupSplash)
     let pixels: Uint8ClampedArray
     let romHash: string
     let saveStatus = ''
     const backupType = emulator.backup_type()
     try {
       romHash = await hashRom(rom)
+      let backupSavedAt = 0
       // EEPROM size is only known once the game runs, so check the type, not the data.
       if (backupType !== 'none') {
         try {
           const stored = await loadBackup(romHash, backupType)
           if (stored) {
             emulator.load_backup(new Uint8Array(stored.data))
+            backupSavedAt = stored.savedAt
             saveStatus = `, ${backupType} save loaded`
           }
         } catch (error) {
           saveStatus = `, ${describeError(error).message}`
+        }
+      }
+      if (resume) {
+        try {
+          const suspended = await loadSuspendState(romHash)
+          if (suspended && suspended.savedAt + SUSPEND_CLOCK_TOLERANCE_MS >= backupSavedAt) {
+            emulator.load_state(new Uint8Array(suspended.data))
+            saveStatus += ', resumed where you left off'
+          }
+        } catch (error) {
+          void deleteSuspendState(romHash).catch(() => undefined)
+          saveStatus += `, could not resume: ${describeError(error).message}`
         }
       }
       pixels = emulator.step_frame()
@@ -269,7 +288,7 @@ function App() {
       const name = file.name.replace(/\.(gba|bin)$/i, '')
       stage = 'validating and executing ROM'
       setRomLoadLog(null)
-      const pixels = await executeRom(rom, name)
+      const pixels = await executeRom(rom, name, true)
       stage = 'saving game to local library'
       const game: SavedGame = {
         id: crypto.randomUUID(),
@@ -311,7 +330,7 @@ function App() {
 
   async function resumeGame(game: SavedGame) {
     try {
-      await executeRom(new Uint8Array(game.rom), game.name)
+      await executeRom(new Uint8Array(game.rom), game.name, true)
       navigate('/play')
     } catch (error) {
       setAppStatus(error instanceof Error ? error.message : 'Could not resume this game')
@@ -450,6 +469,12 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   const [importError, setImportError] = useState<string | null>(null)
   const [toast, setToast] = useState<Toast | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
+  const navigate = useNavigate()
+  const [showLeave, setShowLeave] = useState(false)
+  const pausedBeforeLeaveRef = useRef(false)
+  // Set when the snapshot of where play stopped must not be written, e.g. before a save import.
+  const discardSuspendRef = useRef(false)
+  const runtimeErrorRef = useRef<string | null>(null)
   const showToast = useCallback((message: string, tone: Toast['tone'] = 'info') => setToast({ id: Date.now(), message, tone }), [])
 
   useEffect(() => {
@@ -542,20 +567,84 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     try {
       // Persist (and stop tracking) the current save first, so it cannot overwrite the import.
       flushSaveRef.current?.()
+      // A snapshot keeps the game's memory from before the import, which would overwrite it.
+      discardSuspendRef.current = true
+      await deleteSuspendState(game.romHash)
       await storeBackup(game.romHash, game.backupType, pendingImport.data)
       await onRestart(game, `Imported ${pendingImport.name}; the game restarted with it`)
     } catch (error) {
+      discardSuspendRef.current = false
       setImportError(`Could not import: ${describeError(error).message}`)
     }
   }
   const [showDetails, setShowDetails] = useState(false)
-  const [showStartupSplash, setShowStartupSplash] = useState(() => !settings.skipStartupSplash)
-  const splashVisible = showStartupSplash && !settings.skipStartupSplash
 
   function togglePause() {
     pausedRef.current = !pausedRef.current
     setPaused(pausedRef.current)
   }
+
+  // Back (button or mobile gesture) and Home pause the game and ask before leaving it.
+  const leaveOpenRef = useRef(false)
+  const requestLeave = useCallback(() => {
+    if (leaveOpenRef.current) return
+    leaveOpenRef.current = true
+    pausedBeforeLeaveRef.current = pausedRef.current
+    pausedRef.current = true
+    setPaused(true)
+    setShowLeave(true)
+  }, [])
+  useLeaveGuard(Boolean(game) && !runtimeError, requestLeave)
+
+  function keepPlaying() {
+    leaveOpenRef.current = false
+    setShowLeave(false)
+    pausedRef.current = pausedBeforeLeaveRef.current
+    setPaused(pausedRef.current)
+  }
+
+  function leaveGame(keepProgress: boolean) {
+    if (game && !keepProgress) {
+      discardSuspendRef.current = true
+      void deleteSuspendState(game.romHash).catch((error: unknown) => console.warn('Could not discard the suspended game', error))
+    }
+    // Replacing the guard entry keeps the app open when the game was the first page visited.
+    navigate('/', { replace: true })
+  }
+
+  useEffect(() => {
+    runtimeErrorRef.current = runtimeError
+  }, [runtimeError])
+
+  // Snapshots the console whenever play stops (leaving the page, switching apps, closing the tab),
+  // so the next launch of this ROM resumes exactly there. Mobile browsers may leave without asking.
+  useEffect(() => {
+    if (!game) return
+    const suspend = () => {
+      if (discardSuspendRef.current || runtimeErrorRef.current) return
+      let data: Uint8Array
+      try {
+        data = game.emulator.save_state()
+      } catch {
+        return
+      }
+      // The canvas is gone once the page has unmounted; the snapshot does not need a screenshot.
+      const screenshot = canvasRef.current?.toDataURL('image/png') ?? ''
+      void storeState(game.romHash, SUSPEND_SLOT, data, screenshot).then(() => {
+        if (screenshot) onSnapshot(game.name, screenshot)
+      }).catch((error: unknown) => console.warn('Could not store where play stopped', error))
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') suspend()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('pagehide', suspend)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pagehide', suspend)
+      suspend()
+    }
+  }, [game, onSnapshot])
 
   useEffect(() => {
     if (!game) return
@@ -568,12 +657,6 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [game])
-
-  useEffect(() => {
-    if (!splashVisible) return
-    const timer = window.setTimeout(() => setShowStartupSplash(false), STARTUP_SPLASH_DURATION_MS)
-    return () => window.clearTimeout(timer)
-  }, [splashVisible])
 
   // Keyboard and touch input are tracked separately and combined, so neither releases the other's buttons.
   const keyboardKeysRef = useRef(0)
@@ -662,15 +745,21 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       trackSaveWrites()
       flushSave()
     }
+    // Phones often discard a backgrounded page without `pagehide`.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') onPageHide()
+    }
     // Final flush; afterwards nothing touches this emulator, so App may free it.
     const close = () => {
       window.clearInterval(interval)
       window.removeEventListener('pagehide', onPageHide)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       onPageHide()
       if (flushSaveRef.current === close) flushSaveRef.current = null
     }
     flushSaveRef.current = close
     window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       if (flushSaveRef.current === close) close()
     }
@@ -735,7 +824,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       running = false
       cancelAnimationFrame(animationFrame)
     }
-  }, [game, onRuntimeError, splashVisible])
+  }, [game, onRuntimeError])
 
   if (!game) return (
     <section className="empty-emulator">
@@ -756,14 +845,13 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
 
   return (
     <section className={showActions ? 'emulator-page actions-open' : 'emulator-page'}>
-      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><Link to="/" className="secondary-button" aria-label="Home" title="Home"><House size={17} /> Home</Link><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button></div></div>
+      <div className="emulator-heading"><div className="emulator-title"><h1 title={game.name}>{game.name}</h1></div><div className="emulator-heading-actions" onClick={() => setShowActions(false)}><button className="secondary-button" onClick={requestLeave} aria-label="Home" title="Home"><House size={17} /> Home</button><button className="secondary-button" onClick={togglePause} disabled={Boolean(runtimeError)} aria-pressed={paused}>{paused ? <Play size={17} /> : <Pause size={17} />} {paused ? 'Resume' : 'Pause'}</button><button className="secondary-button" onClick={() => onSettingsChange({ ...settings, touchControls: !settings.touchControls })} aria-pressed={settings.touchControls} aria-label="Touch controls" title="Touch controls"><Gamepad2 size={17} /> Touch</button><button className="secondary-button mobile-only" onClick={() => setShowDetails(true)} aria-label="Details" title="Details"><Info size={17} /> Details</button><button className="secondary-button" onClick={openSaves}><Save size={17} /> Saves</button><button className="secondary-button" onClick={() => setShowSettings(true)}><Settings size={17} /> Settings</button></div></div>
       <div className="emulator-layout">
         <div className={`play-surface${settings.touchControls ? ' has-touch-controls' : ''}`}>
           <div className="screen-well"><canvas ref={canvasRef} width={240} height={160} />
-            {splashVisible && <button className="startup-splash" onClick={() => setShowStartupSplash(false)} aria-label="Skip startup splash"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><strong>GBA<span>-</span>WASM</strong><small>Tap to skip</small></button>}
-            {!splashVisible && !runtimeError && paused && <button className="emulation-notice paused-notice" onClick={togglePause}><strong>Paused</strong><span>Press P or click to resume.</span></button>}
-            {!splashVisible && runtimeError && <div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
-            {!splashVisible && !runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
+            {!runtimeError && paused && <button className="emulation-notice paused-notice" onClick={togglePause}><strong>Paused</strong><span>Press P or click to resume.</span></button>}
+            {runtimeError &&<div className="emulation-notice" role="alert"><strong>Emulation stopped</strong><span>{runtimeError}</span></div>}
+            {!runtimeError && noVideoOutput && !hasVideo && <div className="emulation-notice" role="status"><strong>No video output yet</strong><span>This ROM has not reached a display state the current emulator can render. CPU, BIOS, and graphics support are still incomplete.</span></div>}
           </div>
           {settings.touchControls && <TouchControls theme={settings.touchTheme} haptics={settings.haptics} onChange={onTouchKeys} />}
           {settings.touchControls && <button className="landscape-actions-toggle" onClick={() => setShowActions(!showActions)} aria-expanded={showActions} aria-label={showActions ? 'Hide menu' : 'Show menu'} title={showActions ? 'Hide menu' : 'Show menu'}>{showActions ? <X size={16} /> : <Menu size={16} />}</button>}
@@ -775,6 +863,17 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
         <section className="settings-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">CARTRIDGE</p><h2 id="details-title">Details</h2></div><button className="modal-close" onClick={() => setShowDetails(false)} aria-label="Close details"><X size={18} /></button></div>
           {cartridgeDetails}
+        </section>
+      </div>}
+      {showLeave && <div className="settings-backdrop" role="presentation" onMouseDown={keepPlaying}>
+        <section className="settings-modal leave-modal" role="dialog" aria-modal="true" aria-labelledby="leave-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="settings-modal-heading"><div><p className="eyebrow">PAUSED</p><h2 id="leave-title">Leave game?</h2></div><button className="modal-close" onClick={keepPlaying} aria-label="Keep playing"><X size={18} /></button></div>
+          <p>Your progress is kept: next time you open {game.name}, it resumes right here.</p>
+          <div className="leave-actions">
+            <button type="button" className="primary-button" onClick={keepPlaying} autoFocus><Play size={17} /> Keep playing</button>
+            <button type="button" className="secondary-button" onClick={() => leaveGame(true)}><House size={17} /> Leave</button>
+            <button type="button" className="secondary-button" onClick={() => leaveGame(false)}>Leave and restart from the last in-game save</button>
+          </div>
         </section>
       </div>}
       {toast && <div key={toast.id} className={`toast toast-${toast.tone}`} role={toast.tone === 'error' ? 'alert' : 'status'}>{toast.message}</div>}
@@ -817,7 +916,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
-          <label className="setting-row"><span><strong>Skip startup splash</strong><small>Start directly on the game display.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
+          <label className="setting-row"><span><strong>Skip boot animation</strong><small>Start the game without the GBA-WASM logo intro.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
           <div className="setting-row setting-column">
             <span id="speed-label"><strong>Game speed</strong><small>Sound plays at the same speed, so its pitch follows.</small></span>
             <div className="speed-options" role="radiogroup" aria-labelledby="speed-label">
@@ -859,7 +958,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
               ))}
             </div>
           </div>
-          <p className="settings-note">The GBA-WASM splash is a browser presentation only; it does not emulate the GBA BIOS boot sequence.</p>
+          <p className="settings-note">The boot animation is drawn by the emulated hardware but is GBA-WASM's own; it does not reproduce the original GBA BIOS boot sequence.</p>
         </section>
       </div>}
     </section>

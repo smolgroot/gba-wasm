@@ -25,7 +25,7 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 - `DONE` PSG and DirectSound audio streamed to the browser at 32,768 Hz.
 - `DONE` Robustness: seeded fuzz tests show random cartridge code, random I/O writes, and corrupted save states produce errors, never core panics (which abort the WASM instance). Frontend tests run with Vitest (`pnpm test`).
 
-Wait states, the prefetch buffer, serial/link hardware, and several BIOS services are not implemented.
+Wait states, the prefetch buffer, serial/link hardware, and several BIOS services (BIOS-02) are not implemented.
 
 ## Completed stories
 
@@ -256,6 +256,23 @@ Acceptance criteria:
 
 See [WASM Boundary](doc/architecture/wasm-boundary.md#save-states).
 
+### BOOT-02: Play a boot animation before the cartridge starts
+
+**Status:** `DONE`
+**Priority:** `P1`
+**Depends on:** BOOT-01, PPU-02
+
+As a user, I want a short GBA-WASM logo animation when a game starts, drawn by the emulated console rather than overlaid by the browser.
+
+Acceptance criteria:
+
+- Draw the animation by programming emulated palette, VRAM, OAM, and display registers (bitmap background, affine logo object, brightness fades); the browser does not synthesize the frames.
+- After the animation, the game runs exactly as after a direct HLE boot (same frames and save state).
+- A newly pressed button skips it; a setting turns it off; a save state taken during it is the game's start state.
+- Do not present it as the Nintendo BIOS boot sequence.
+
+It replaces the browser splash ([HLE BIOS](doc/rust-core/bios.md#boot-animation)). `rust/tests/boot_intro.rs` covers the drawn frames, the key skip, the save state, and equivalence with a direct boot on `arm.gba`.
+
 ## P2: Compatibility and fidelity
 
 ### CPU-03: Complete the ARM7TDMI instruction set needed by targets
@@ -299,6 +316,24 @@ Acceptance criteria:
 - Test deterministic sample generation and audio lifecycle behavior.
 
 All four PSG channels and both DirectSound FIFOs, including sound DMA, are implemented and mixed at 32,768 Hz ([Audio](doc/rust-core/apu.md)). Rust tests cover sample generation. `src/audio.test.ts` runs the worklet processor directly (prebuffering, fade-out on underrun and while paused, the latency bound, playback rate, ring wrap) and checks the `AudioOutput` lifecycle against a fake Web Audio API (resume only while suspended, cleanup when the worklet fails to load, teardown). The App's gesture listeners were checked by hand in headless Chrome.
+
+### BIOS-02: Close HLE BIOS compatibility gaps
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** BOOT-01
+
+As a user, I want games that use common BIOS services to keep running instead of stopping with `UnsupportedBiosCall`.
+
+Acceptance criteria:
+
+- Implement `SoftReset` (`0x00`), which many games call for their button-combination reset: it resets the stacks and the top of IWRAM and restarts at the ROM or EWRAM entry chosen by the byte at `0x03007FFA`.
+- Implement `SoundBias` (`0x19`), `BitUnPack` (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), `MidiKey2Freq` (`0x1F`), and `GetBiosChecksum` (`0x0D`), each with a focused unit test.
+- Make `CpuSet` and `CpuFastSet` ignore sources in the BIOS region, as the decompression services already do.
+- Save the BIOS latch in save states (with a `STATE_VERSION` bump) so restored states replay identically, as SAVE-02 requires.
+- Add the missing unit tests for Div, DivArm, Sqrt, and ArcTan.
+- Record a decision, with a reference, for division by zero and reserved `RegisterRamReset` flags, which now stop emulation.
+- Each change is driven by a named failing ROM or a documented hardware reference, not by plausible values.
 
 ### COMPAT-01: Track a reproducible homebrew compatibility set
 
