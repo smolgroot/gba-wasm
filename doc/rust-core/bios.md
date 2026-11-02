@@ -1,6 +1,6 @@
 # HLE BIOS
 
-GBA-WASM never loads or runs a real BIOS image. The BIOS is high-level emulated (HLE): a small generated image provides the exception vectors and the IRQ dispatcher, and BIOS calls (`SWI`) are implemented in Rust. The project does not claim BIOS equivalence, and games that depend on BIOS-specific values or timing can behave differently.
+Pecten never loads or runs a real BIOS image. The BIOS is high-level emulated (HLE): a small generated image provides the exception vectors and the IRQ dispatcher, and BIOS calls (`SWI`) are implemented in Rust. The project does not claim BIOS equivalence, and games that depend on BIOS-specific values or timing can behave differently.
 
 ## Boot contract
 
@@ -55,7 +55,7 @@ The logo is generated from `public/logo.png` by `pnpm run bootlogo:generate` int
 
 At the end, `GbaCore` clears palette, VRAM, and OAM and repeats the `load_rom` I/O, clock, and GPU reset, so the game runs exactly as after a direct boot. A state saved during the animation is the game's start state, and loading any state cancels the animation. `rust/tests/boot_intro.rs` checks the drawn frames, the key skip, the save state, and that the following game frames and state match a direct boot.
 
-This is GBA-WASM's own animation. It does not reproduce the Nintendo BIOS boot sequence, its timing, or its sound. The cartridge header (including its logo field) is validated by `load_rom` whether or not the animation plays.
+This is Pecten's own animation. It does not reproduce the Nintendo BIOS boot sequence, its timing, or its sound. The cartridge header (including its logo field) is validated by `load_rom` whether or not the animation plays.
 
 ## Calling convention
 

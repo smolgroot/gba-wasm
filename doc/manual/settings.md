@@ -6,7 +6,7 @@ Open **Settings** from the button above the game. Changes apply immediately and 
 
 ## Skip boot animation
 
-When off, every game starts with a two-second GBA-WASM boot animation: the logo spins in and the name is typed out. Press any GBA button (keyboard or touch) to skip it. The emulated console draws it, but it is GBA-WASM's own animation, not the original Game Boy Advance boot sequence. Games resumed from where you left off skip it. See [HLE BIOS](../rust-core/bios.md#boot-animation) for how it works.
+When off, every game starts with a two-second Pecten boot animation: the logo spins in and the name is typed out. Press any GBA button (keyboard or touch) to skip it. The emulated console draws it, but it is Pecten's own animation, not the original Game Boy Advance boot sequence. Games resumed from where you left off skip it. See [HLE BIOS](../rust-core/bios.md#boot-animation) for how it works.
 
 ## Game speed
 
@@ -49,10 +49,10 @@ The D-pad never vibrates, because its direction changes too often while you stee
 
 ## Theme
 
-Colours of the touch controls and of the play screen while touch controls are shown. Seven themes are available: GBA-WASM, Indigo GBA, Electric Pikachu, Emerald, Fire Red, Hyrule, and OLED Silver.
+Colours of the touch controls and of the play screen while touch controls are shown. Seven themes are available: Pecten, Indigo GBA, Electric Pikachu, Emerald, Fire Red, Hyrule, and OLED Silver.
 
 <div class="theme-gallery">
-  <figure><img src="./images/mobile-portrait.webp" alt="GBA-WASM theme" /><figcaption>GBA-WASM</figcaption></figure>
+  <figure><img src="./images/mobile-portrait.webp" alt="Pecten theme" /><figcaption>Pecten</figcaption></figure>
   <figure><img src="./images/theme-pikachu.webp" alt="Electric Pikachu theme" /><figcaption>Electric Pikachu</figcaption></figure>
   <figure><img src="./images/theme-emerald.webp" alt="Emerald theme" /><figcaption>Emerald</figcaption></figure>
   <figure><img src="./images/theme-oled-silver.webp" alt="OLED Silver theme" /><figcaption>OLED Silver</figcaption></figure>

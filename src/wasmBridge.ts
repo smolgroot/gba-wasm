@@ -1,13 +1,13 @@
-export type GbaWasmModule = {
+export type PectenModule = {
   init: () => void
   hello: (name: string) => string
   inspect_rom: (rom: Uint8Array) => string
   run_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
   run_thumb_rom: (rom: Uint8Array, steps: number) => Uint8ClampedArray
-  create_emulator: (rom: Uint8Array, bootIntro: boolean) => GbaWasmEmulator
+  create_emulator: (rom: Uint8Array, bootIntro: boolean) => PectenEmulator
 }
 
-export type GbaWasmEmulator = {
+export type PectenEmulator = {
   step_frame: () => Uint8ClampedArray
   backup_type: () => string
   backup_data: () => Uint8Array
@@ -22,7 +22,7 @@ export type GbaWasmEmulator = {
   free: () => void
 }
 
-type GeneratedWasmEmulator = Omit<GbaWasmEmulator, 'step_frame' | 'frame'> & {
+type GeneratedWasmEmulator = Omit<PectenEmulator, 'step_frame' | 'frame'> & {
   step_frame: () => Uint8Array
   frame: () => Uint8Array
 }
@@ -37,21 +37,21 @@ type GeneratedWasmModule = {
   WasmEmulator: new (rom: Uint8Array, bootIntro: boolean) => GeneratedWasmEmulator
 }
 
-let wasmModule: GbaWasmModule | null = null
+let wasmModule: PectenModule | null = null
 
-export async function loadGbaWasm(): Promise<GbaWasmModule> {
+export async function loadPecten(): Promise<PectenModule> {
   if (wasmModule) {
     return wasmModule
   }
 
   const moduleUrl = new URL(
-    `${import.meta.env.BASE_URL}wasm/gba_wasm.js`,
+    `${import.meta.env.BASE_URL}wasm/pecten.js`,
     window.location.origin,
   ).href
   const mod = (await import(/* @vite-ignore */ moduleUrl)) as GeneratedWasmModule
   await mod.default()
 
-  const api: GbaWasmModule = {
+  const api: PectenModule = {
     init: mod.init,
     hello: mod.hello,
     inspect_rom: mod.inspect_rom,

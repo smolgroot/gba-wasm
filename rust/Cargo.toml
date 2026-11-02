@@ -1,5 +1,5 @@
 [package]
-name = "gba_wasm"
+name = "pecten"
 version = "0.1.0"
 edition = "2024"
 

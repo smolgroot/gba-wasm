@@ -1,4 +1,4 @@
-# GBA WASM Development Backlog
+# Pecten Development Backlog
 
 This is the canonical implementation backlog. Each story defines observable acceptance criteria so work can be implemented and verified in small increments. Update its status when work starts or finishes; keep architectural detail in the linked documentation rather than duplicating it here.
 
@@ -262,7 +262,7 @@ See [WASM Boundary](doc/architecture/wasm-boundary.md#save-states).
 **Priority:** `P1`
 **Depends on:** BOOT-01, PPU-02
 
-As a user, I want a short GBA-WASM logo animation when a game starts, drawn by the emulated console rather than overlaid by the browser.
+As a user, I want a short Pecten logo animation when a game starts, drawn by the emulated console rather than overlaid by the browser.
 
 Acceptance criteria:
 

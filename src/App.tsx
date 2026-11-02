@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ArrowDownToLine, ArrowLeft, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, HardDrive, House, Info, Menu, Pause, Play, Rabbit, Rocket, Save, Settings, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { loadGbaWasm, type GbaWasmEmulator } from './wasmBridge'
+import { loadPecten, type PectenEmulator } from './wasmBridge'
 import { deleteSavedGame, getSavedGames, saveGame, updateSavedGameScreenshot, type SavedGame } from './savedGames'
 import { deleteSuspendState, hashRom, loadBackup, loadStates, loadSuspendState, STATE_SLOTS, storeBackup, storeState, SUSPEND_SLOT, validateSaveFile, type StoredState } from './backupStorage'
 import { useLeaveGuard } from './leaveGuard'
@@ -14,18 +14,19 @@ import { isHapticStrength, type HapticStrength } from './haptics'
 import { FEATURED_GAMES, buildShowcase, gbaBoxArtUrl, type ShowcaseItem } from './featuredGames'
 import { CoverFlow } from './CoverFlow'
 
-type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: GbaWasmEmulator; rom: Uint8Array; romHash: string; backupType: string }
+type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: PectenEmulator; rom: Uint8Array; romHash: string; backupType: string }
 type Toast = { id: number; message: string; tone: 'info' | 'error' }
 const TOAST_DURATION_MS = 2500
 type SaveFlushRef = { current: (() => void) | null }
-const DOCS_URL = '/gba-wasm/docs/'
-const SOURCE_URL = 'https://github.com/smolgroot/gba-wasm'
+const DOCS_URL = '/docs/'
+const SOURCE_URL = 'https://github.com/smolgroot/pecten'
 const GBA_FRAME_DURATION_MS = (1000 * 280_896) / 16_777_216
 // Display refresh timestamps jitter; a frame due within this margin runs now.
 const FRAME_PACING_TOLERANCE_MS = 2
 // Upper bound on frames run per display refresh, so super-fast mode on a slow display cannot stall input.
 // Leaves headroom above the 4 frames per 60 Hz refresh that super-fast mode needs.
 const MAX_FRAMES_PER_CALLBACK = 6
+// Named before the rename to Pecten; kept so stored data stays readable.
 const SETTINGS_STORAGE_KEY = 'gba-wasm.settings'
 const KEYBOARD_CONTROLS = [['←↑↓→', 'D-PAD'], ['X', 'A'], ['Z', 'B'], ['A', 'L'], ['S', 'R'], ['ENTER', 'START'], ['SHIFT', 'SELECT'], ['P', 'PAUSE']]
 // Games write saves over several frames; persist once writes have stopped for this long.
@@ -175,10 +176,10 @@ function CartridgeMockup({ name }: { name: string }) {
 
 function App() {
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const emulatorRef = useRef<GbaWasmEmulator | null>(null)
+  const emulatorRef = useRef<PectenEmulator | null>(null)
   // Replaced emulators stay alive until the page that drives them has unmounted, so its frame
   // loop and save tracking can never call into freed WebAssembly memory.
-  const retiredEmulatorsRef = useRef<GbaWasmEmulator[]>([])
+  const retiredEmulatorsRef = useRef<PectenEmulator[]>([])
   const flushSaveRef = useRef<(() => void) | null>(null)
   const launchIdRef = useRef(0)
   const navigate = useNavigate()
@@ -200,7 +201,7 @@ function App() {
 
   useEffect(() => {
     let mounted = true
-    void loadGbaWasm().then((wasm) => {
+    void loadPecten().then((wasm) => {
       if (mounted) setAppStatus(wasm.hello('GBA'))
     }).catch((error: unknown) => {
       if (mounted) setAppStatus(error instanceof Error ? error.message : 'WebAssembly failed to load')
@@ -221,7 +222,7 @@ function App() {
 
   /** With `resume`, continues from the snapshot taken when this ROM last stopped, if there is one. */
   async function executeRom(rom: Uint8Array, name: string, resume = false) {
-    const wasm = await loadGbaWasm()
+    const wasm = await loadPecten()
     const info = wasm.inspect_rom(rom)
     // Restoring a suspended state below cancels the boot animation.
     const emulator = wasm.create_emulator(rom, !settings.skipStartupSplash)
@@ -365,15 +366,15 @@ function App() {
   return (
     <div className={touchPlay ? 'app-shell touch-play' : 'app-shell'} data-touch-theme={touchPlay ? settings.touchTheme : undefined}>
       <header className="site-header">
-        <Link className="brand" to="/" aria-label="GBA-WASM home">
-          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><span>GBA<span className="brand-dash">-</span>WASM</span>
+        <Link className="brand" to="/" aria-label="Pecten home">
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" /><span>PECTEN</span>
         </Link>
         <nav className="header-nav" aria-label="Main navigation">
           <NavLink to="/saved-games" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
             Saved games <span className="saved-count">{savedGames.length}</span>
           </NavLink>
           <a className="nav-icon-link" href={DOCS_URL} aria-label="Documentation" title="Documentation"><BookOpen size={18} /></a>
-          <a className="nav-icon-link" href={SOURCE_URL} target="_blank" rel="noreferrer" aria-label="Star GBA-WASM on GitHub" title="Star GBA-WASM on GitHub"><GithubMark /></a>
+          <a className="nav-icon-link" href={SOURCE_URL} target="_blank" rel="noreferrer" aria-label="Star Pecten on GitHub" title="Star Pecten on GitHub"><GithubMark /></a>
           <button className="header-load" onClick={triggerLoad}><ArrowDownToLine size={17} /><span>Load ROM</span></button>
         </nav>
         <input ref={inputRef} className="file-input" type="file" accept=".gba,.bin,application/octet-stream" onChange={(event) => void loadRomFile(event)} />
@@ -387,9 +388,9 @@ function App() {
         </Routes>
       </main>
       <footer className="site-footer">
-        <span>GBA-WASM <span className="footer-dot">/</span> Rust + WebAssembly</span>
+        <span>Pecten <span className="footer-dot">/</span> Rust + WebAssembly</span>
         <span className="runtime-status"><i /> {appStatus}</span>
-        <p className="legal-disclaimer">GBA-WASM is an open-source Game Boy Advance emulator. This project is not affiliated with Nintendo. Game Boy Advance is a registered trademark of Nintendo Co., Ltd.</p>
+        <p className="legal-disclaimer">Pecten is an open-source Game Boy Advance emulator. This project is not affiliated with Nintendo. Game Boy Advance is a registered trademark of Nintendo Co., Ltd.</p>
       </footer>
       {/* Kept off the play screen so it never covers the game or the touch controls. */}
       <InstallPrompt hidden={pathname === '/play'} />
@@ -413,15 +414,15 @@ function HomePage({ savedGames, onLoad, onResume, onQuickStart }: { savedGames: 
             <a href={SOURCE_URL} target="_blank" rel="noreferrer"><CodeXml size={15} /> Source code <ArrowLeft className="link-arrow" size={13} /></a>
           </div>
         </div>
-        <div className="console-stage" aria-label="GBA-WASM console illustration">
+        <div className="console-stage" aria-label="Pecten console illustration">
           <div className="console">
-            <div className="console-topline"><span>GBA-WASM</span><span>ADVANCE</span></div>
+            <div className="console-topline"><span>PECTEN</span><span>ADVANCE</span></div>
             <div className="console-body">
               <div className="console-left-controls">
                 <div className="dpad"><span /><i /><b /><em /><strong /></div>
                 <div className="system-buttons"><b>SELECT</b><b>START</b></div>
               </div>
-              <div className="console-screen-frame"><div className="console-screen"><div className="screen-scanlines" /><img src={`${import.meta.env.BASE_URL}logo.png`} alt="GBA-WASM" /><span>PRESS START</span></div></div>
+              <div className="console-screen-frame"><div className="console-screen"><div className="screen-scanlines" /><img src={`${import.meta.env.BASE_URL}logo.png`} alt="Pecten" /><span>PRESS START</span></div></div>
               <div className="console-right-controls">
                 <div className="action-buttons"><b>B</b><b>A</b></div>
                 <div className="console-speaker"><i /><i /><i /><i /><i /><i /></div>
@@ -916,7 +917,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
       {showSettings && <div className="settings-backdrop" role="presentation" onMouseDown={() => setShowSettings(false)}>
         <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="settings-modal-heading"><div><p className="eyebrow">EMULATOR</p><h2 id="settings-title">Settings</h2></div><button className="modal-close" onClick={() => setShowSettings(false)} aria-label="Close settings"><X size={18} /></button></div>
-          <label className="setting-row"><span><strong>Skip boot animation</strong><small>Start the game without the GBA-WASM logo intro.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
+          <label className="setting-row"><span><strong>Skip boot animation</strong><small>Start the game without the Pecten logo intro.</small></span><input type="checkbox" checked={settings.skipStartupSplash} onChange={(event) => onSettingsChange({ ...settings, skipStartupSplash: event.target.checked })} /></label>
           <div className="setting-row setting-column">
             <span id="speed-label"><strong>Game speed</strong><small>Sound plays at the same speed, so its pitch follows.</small></span>
             <div className="speed-options" role="radiogroup" aria-labelledby="speed-label">
@@ -958,7 +959,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
               ))}
             </div>
           </div>
-          <p className="settings-note">The boot animation is drawn by the emulated hardware but is GBA-WASM's own; it does not reproduce the original GBA BIOS boot sequence.</p>
+          <p className="settings-note">The boot animation is drawn by the emulated hardware but is Pecten's own; it does not reproduce the original GBA BIOS boot sequence.</p>
         </section>
       </div>}
     </section>

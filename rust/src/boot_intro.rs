@@ -1,4 +1,4 @@
-//! HLE BIOS boot animation: the GBA-WASM logo zooms in, the wordmark is typed out, and the
+//! HLE BIOS boot animation: the Pecten logo zooms in, the wordmark is typed out, and the
 //! screen fades to black before the cartridge starts.
 //!
 //! The animation only programs emulated hardware (palette, VRAM, OAM, and display
@@ -39,12 +39,11 @@ const GRADIENT_LEVELS: u32 = 8;
 const GRADIENT_CENTER: [u32; 3] = [0x49, 0x37, 0x5D];
 const GRADIENT_EDGE: [u32; 3] = [0x21, 0x1D, 0x29];
 const TEXT_COLOR: u8 = GRADIENT_LEVELS as u8 + 1;
-const ACCENT_COLOR: u8 = TEXT_COLOR + 1;
-const SHADOW_COLOR: u8 = TEXT_COLOR + 2;
-const TEXT_PALETTE: [[u32; 3]; 3] = [[0xE8, 0xD7, 0xFA], [0xBB, 0x8D, 0xF2], [0x17, 0x11, 0x1F]];
+const SHADOW_COLOR: u8 = TEXT_COLOR + 1;
+const TEXT_PALETTE: [[u32; 3]; 2] = [[0xE8, 0xD7, 0xFA], [0x17, 0x11, 0x1F]];
 const BAYER_4X4: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
-const WORDMARK: &[u8] = b"GBA-WASM";
+const WORDMARK: &[u8] = b"PECTEN";
 const GLYPH_SCALE: i32 = 2;
 const GLYPH_ADVANCE: i32 = 6 * GLYPH_SCALE;
 const WORDMARK_TOP: i32 = 112;
@@ -190,13 +189,8 @@ fn draw_wordmark(memory: &mut MemoryMap, frame: u32) {
     let width = WORDMARK.len() as i32 * GLYPH_ADVANCE - GLYPH_SCALE;
     let left = (SCREEN_WIDTH - width) / 2;
     for (position, &letter) in WORDMARK[..letters].iter().enumerate() {
-        let color = if letter == b'-' {
-            ACCENT_COLOR
-        } else {
-            TEXT_COLOR
-        };
         let x = left + position as i32 * GLYPH_ADVANCE;
-        for (dx, dy, color) in [(1, 2, SHADOW_COLOR), (0, 0, color)] {
+        for (dx, dy, color) in [(1, 2, SHADOW_COLOR), (0, 0, TEXT_COLOR)] {
             draw_glyph(memory, letter, x + dx, WORDMARK_TOP + dy, color);
         }
     }
@@ -222,13 +216,11 @@ fn draw_glyph(memory: &mut MemoryMap, letter: u8, left: i32, top: i32, color: u8
 /// 5x7 glyphs, one row per byte with the leftmost pixel in bit 4.
 fn glyph(letter: u8) -> [u8; 7] {
     match letter {
-        b'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E],
-        b'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
-        b'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
-        b'-' => [0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00],
-        b'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11],
-        b'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
-        b'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        b'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        b'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        b'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+        b'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        b'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
         _ => [0; 7],
     }
 }
@@ -274,6 +266,11 @@ mod tests {
     fn logo_pixels_are_square_hex_rows() {
         assert!(LOGO_PIXELS.iter().all(|row| row.len() == LOGO_SIZE as usize
             && row.bytes().all(|digit| digit.is_ascii_hexdigit())));
+    }
+
+    #[test]
+    fn every_wordmark_letter_has_a_glyph() {
+        assert!(WORDMARK.iter().all(|&letter| glyph(letter) != [0; 7]));
     }
 
     #[test]

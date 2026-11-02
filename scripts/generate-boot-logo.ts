@@ -48,7 +48,7 @@ for (let y = 0; y < SIZE; y += 1) {
 }
 
 const hex = (value: number) => `0x${value.toString(16).toUpperCase().padStart(4, '0')}`
-writeFileSync(output, `//! GBA-WASM logo for the boot animation, generated from \`public/logo.png\` by
+writeFileSync(output, `//! Pecten logo for the boot animation, generated from \`public/logo.png\` by
 //! \`scripts/generate-boot-logo.ts\`. Do not edit by hand.
 
 /// Object palette 0 in RGB555. Entry 0 is transparent.

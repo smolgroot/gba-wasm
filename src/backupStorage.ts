@@ -1,6 +1,7 @@
 // Cartridge save data (SRAM/Flash/EEPROM) and save states, kept apart from the ROM library
 // so neither database needs a schema migration when the other changes.
 
+// Named before the rename to Pecten; kept so stored data stays readable.
 const DATABASE_NAME = 'gba-wasm-saves'
 // Version 2 added the save-state store; upgrades only create missing stores.
 const DATABASE_VERSION = 2

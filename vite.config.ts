@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-const base = '/gba-wasm/'
+const base = '/'
 
 export default defineConfig({
   base,
@@ -11,7 +11,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
-        navigateFallbackDenylist: [/^\/gba-wasm\/docs(?:\/|$)/],
+        navigateFallbackDenylist: [/^\/docs(?:\/|$)/],
       },
       includeAssets: [
         'favicon.svg',
@@ -23,8 +23,8 @@ export default defineConfig({
         'boxart/*.webp',
       ],
       manifest: {
-        name: 'GBA WASM',
-        short_name: 'GBAWASM',
+        name: 'Pecten',
+        short_name: 'Pecten',
         description: 'Retro gaming emulator shell built with Rust and WebAssembly.',
         id: base,
         theme_color: '#19171e',

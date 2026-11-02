@@ -1,6 +1,7 @@
 /** Colour themes for the on-screen buttons; the palettes live in App.css under `[data-touch-theme]`. */
 export const TOUCH_THEMES = [
-  { id: 'gba-wasm', label: 'GBA-WASM' },
+  // The id predates the rename to Pecten and is kept because it is stored in user settings.
+  { id: 'gba-wasm', label: 'Pecten' },
   { id: 'indigo', label: 'Indigo GBA' },
   { id: 'pikachu', label: 'Electric Pikachu' },
   { id: 'emerald', label: 'Emerald' },

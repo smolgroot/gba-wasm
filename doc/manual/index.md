@@ -1,13 +1,13 @@
 # Getting Started
 
-GBA-WASM runs Game Boy Advance games in your browser. Everything stays on your device: ROMs, saves, and settings are stored by the browser and never uploaded.
+Pecten runs Game Boy Advance games in your browser. Everything stays on your device: ROMs, saves, and settings are stored by the browser and never uploaded.
 
-![The GBA-WASM home page](./images/home-desktop.webp)
+![The Pecten home page](./images/home-desktop.webp)
 
 ## Load a game
 
 1. Click **Load ROM** in the header or on the home page.
-2. Pick a `.gba` (or `.bin`) file. GBA-WASM does not include any games; you bring your own ROM.
+2. Pick a `.gba` (or `.bin`) file. Pecten does not include any games; you bring your own ROM.
 3. The game opens on the play screen and is added to your library.
 
 If a file cannot be loaded, the play screen shows a diagnostic log with the file name, size, the stage that failed, and the error. Copy it into a bug report if you think the ROM should work.
@@ -40,7 +40,7 @@ Removing a game from the library deletes the ROM copy, not its saves. If you loa
 
 ## Install as an app
 
-On browsers that support it, GBA-WASM offers to install itself as an app (a PWA). Installed, it opens fullscreen from your home screen and works offline.
+On browsers that support it, Pecten offers to install itself as an app (a PWA). Installed, it opens fullscreen from your home screen and works offline.
 
 - **Android and desktop Chrome or Edge:** click **Install** in the prompt, or use the browser's install menu.
 - **iPhone and iPad:** in Safari, tap **Share**, then **Add to Home Screen**.

@@ -1,23 +1,23 @@
 {
-  "name": "GBA WASM",
-  "short_name": "GBAWASM",
+  "name": "Pecten",
+  "short_name": "Pecten",
   "description": "Retro gaming emulator shell built with Rust and WebAssembly.",
-  "id": "/gba-wasm/",
-  "start_url": "/gba-wasm/",
-  "scope": "/gba-wasm/",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "background_color": "#19171e",
   "theme_color": "#19171e",
   "icons": [
     {
-      "src": "/gba-wasm/icons/icon-192.png",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/gba-wasm/icons/icon-512.png",
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

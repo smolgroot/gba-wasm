@@ -556,7 +556,7 @@ pub fn init() {
 
 #[wasm_bindgen]
 pub fn hello(name: &str) -> String {
-    format!("GBA WASM ready: {}", name)
+    format!("Pecten ready: {}", name)
 }
 
 #[wasm_bindgen]

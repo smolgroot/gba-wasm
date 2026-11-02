@@ -1,4 +1,4 @@
-# GBA WASM
+# Pecten
 
 A Game Boy Advance emulator that runs in the browser. The emulator core is written in Rust and compiled to WebAssembly; the app shell is React and installs as a PWA for offline, fullscreen play on phones and computers.
 

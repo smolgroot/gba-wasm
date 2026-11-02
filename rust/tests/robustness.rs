@@ -8,7 +8,7 @@
 //! The default case counts keep `cargo test` fast. For a deeper search, multiply them:
 //! `GBA_FUZZ_SCALE=50 RUSTFLAGS="-C overflow-checks=on" cargo test --release --test robustness`.
 
-use gba_wasm::GbaCore;
+use pecten::GbaCore;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 const HEADER_END: usize = 0xC0;

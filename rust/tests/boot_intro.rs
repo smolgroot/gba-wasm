@@ -1,6 +1,6 @@
 //! The HLE BIOS boot animation, run in front of the jsmolka/gba-tests `arm.gba` ROM.
 
-use gba_wasm::GbaCore;
+use pecten::GbaCore;
 
 const ROM: &[u8] = include_bytes!("fixtures/gba-tests/arm.gba");
 const INTRO_FRAMES: usize = 116;

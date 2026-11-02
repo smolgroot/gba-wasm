@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Download, Share, X } from 'lucide-react'
 
+// Named before the rename to Pecten; kept so stored data stays readable.
 const DISMISS_STORAGE_KEY = 'gba-wasm-install-dismissed-at'
 // A dismissed prompt stays hidden for this long before it may be offered again.
 const DISMISS_DURATION_MS = 14 * 24 * 60 * 60 * 1000
@@ -82,7 +83,7 @@ export function InstallPrompt({ hidden }: { hidden: boolean }) {
     <aside className="install-prompt" role="dialog" aria-labelledby="install-prompt-title">
       <img src={`${import.meta.env.BASE_URL}icons/icon-192.png`} alt="" />
       <div className="install-prompt-copy">
-        <strong id="install-prompt-title">Install GBA-WASM</strong>
+        <strong id="install-prompt-title">Install Pecten</strong>
         {mode.kind === 'native'
           ? <p>Play fullscreen and offline, straight from your home screen.</p>
           : <p>Tap <Share size={13} aria-label="Share" /> then <b>Add to Home Screen</b> to play fullscreen and offline.</p>}

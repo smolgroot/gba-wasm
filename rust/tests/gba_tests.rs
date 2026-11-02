@@ -4,7 +4,7 @@
 //! test in its result register (0 when every test passed): r12 for the ARM-state
 //! suites and r7 for `thumb.gba`.
 
-use gba_wasm::{GbaCore, SCREEN_WIDTH, StateError};
+use pecten::{GbaCore, SCREEN_WIDTH, StateError};
 
 const IDLE_LOOP: u32 = 0xEAFF_FFFE;
 const STEP_LIMIT: u32 = 2_000_000;

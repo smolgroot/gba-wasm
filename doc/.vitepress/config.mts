@@ -1,10 +1,10 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'GBA WASM',
+  title: 'Pecten',
   description: 'The official documentation for the GBA emulator on WebAssembly.',
   lang: 'en-US',
-  base: '/gba-wasm/docs/',
+  base: '/docs/',
   lastUpdated: true,
   vite: {
     publicDir: '../public',
@@ -57,6 +57,6 @@ export default defineConfig({
         ],
       },
     ],
-    socialLinks: [{ icon: 'github', link: 'https://github.com/smolgroot/gba-wasm' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/smolgroot/pecten' }],
   },
 })

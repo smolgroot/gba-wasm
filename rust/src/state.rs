@@ -21,7 +21,7 @@ impl fmt::Display for StateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Truncated => write!(formatter, "save state is truncated"),
-            Self::NotAState => write!(formatter, "file is not a GBA-WASM save state"),
+            Self::NotAState => write!(formatter, "file is not a Pecten save state"),
             Self::UnsupportedVersion { found, supported } => write!(
                 formatter,
                 "save state version {found} is not supported (this build reads version {supported})"

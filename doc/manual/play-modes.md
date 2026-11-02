@@ -55,6 +55,6 @@ This layout applies to touch screens up to 540 pixels high, which covers phones.
 
 ## Tips for phones
 
-- [Install GBA-WASM](./index.md#install-as-an-app) as an app for true fullscreen without the browser's address bar.
+- [Install Pecten](./index.md#install-as-an-app) as an app for true fullscreen without the browser's address bar.
 - Lock the rotation if the layout switches while you play.
 - On iPhone, haptics need iOS 18 or later.

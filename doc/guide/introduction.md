@@ -1,6 +1,6 @@
 # Introduction
 
-GBA WASM is a browser-first Game Boy Advance emulator built with Rust and WebAssembly. The project is organized around a clean boundary: the emulator logic lives in Rust, while the app shell is delivered through a modern web stack.
+Pecten is a browser-first Game Boy Advance emulator built with Rust and WebAssembly. The project is organized around a clean boundary: the emulator logic lives in Rust, while the app shell is delivered through a modern web stack.
 
 This section is for contributors. To play games, see the [User Manual](../manual/index.md).
 

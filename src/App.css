@@ -2,7 +2,6 @@
 .site-header { width: min(1240px, calc(100% - 64px)); height: 82px; margin: 0 auto; border-bottom: 1px solid #34372f; display: flex; align-items: center; justify-content: space-between; }
 .brand { display: inline-flex; gap: 11px; align-items: center; color: #f2f2ec; text-decoration: none; font-family: var(--pixel); font-size: 10px; letter-spacing: 0; }
 .brand img { width: 32px; height: 32px; object-fit: contain; image-rendering: pixelated; }
-.brand-dash { color: var(--violet); }
 .header-nav { display: flex; align-items: center; gap: 25px; }
 .nav-link { display: flex; align-items: center; gap: 9px; color: #c0c3b9; text-decoration: none; font-size: 13px; transition: color .18s ease; }
 .nav-link:hover, .nav-link.active { color: var(--violet-light); }

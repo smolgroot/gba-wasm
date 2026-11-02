@@ -6,6 +6,7 @@ export type SavedGame = {
   rom: ArrayBuffer
 }
 
+// Named before the rename to Pecten; kept so stored data stays readable.
 const DATABASE_NAME = 'gba-wasm-library'
 const STORE_NAME = 'games'
 
