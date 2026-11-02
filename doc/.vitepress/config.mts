@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   title: 'Pecten',
   description: 'The official documentation for the GBA emulator on WebAssembly.',
   lang: 'en-US',
@@ -59,4 +60,4 @@ export default defineConfig({
     ],
     socialLinks: [{ icon: 'github', link: 'https://github.com/smolgroot/pecten' }],
   },
-})
+}))

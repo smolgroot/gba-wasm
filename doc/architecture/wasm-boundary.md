@@ -17,6 +17,30 @@ The WebAssembly boundary keeps the browser app and the emulator core separate.
 
 The emulator page steps frames from `requestAnimationFrame` callbacks against a deadline. The deadline advances by one GBA frame (280,896 cycles, about 16.74 ms) divided by the game speed for each frame run, with 2 ms of tolerance for timestamp jitter. The speed is chosen in Settings: Slow ×0.5, Normal ×1, Fast ×2, or Super ×4. A callback runs every frame that is due, up to six (`MAX_FRAMES_PER_CALLBACK`, leaving headroom above the four per 60 Hz refresh that Super needs), and draws only the last one, so Normal averages 59.73 fps, Fast about 120 fps, and Super about 240 fps on a 60 Hz display when the device keeps up. After a stall of more than three frames, the deadline resynchronizes instead of catching up. Audio is played at the same speed as the game, so its pitch rises at Fast and Super and drops at Slow, like a tape played at another speed.
 
+```mermaid
+sequenceDiagram
+  participant RAF as requestAnimationFrame
+  participant Page as EmulatorPage (App.tsx)
+  participant Emu as WasmEmulator
+  participant Core as GbaCore
+  participant Out as canvas · AudioWorklet
+
+  Page->>Emu: set_pressed_keys(keyboard | touch)<br/>(on every input change)
+  RAF->>Page: advanceFrame(timestamp)
+  loop each due frame, at most MAX_FRAMES_PER_CALLBACK
+    Page->>Emu: step_frame()
+    Emu->>Core: step_frame()
+    Note over Core: CPU steps until VBlank,<br/>each line rendered at its HBlank
+    Core-->>Emu: RGBA Vec<u8>
+    Emu-->>Page: Uint8ClampedArray (240×160×4)
+    Page->>Emu: take_audio_samples()
+    Emu-->>Page: Int16Array (interleaved stereo)
+    Page->>Out: push samples to the worklet ring buffer
+  end
+  Page->>Out: putImageData(last frame)
+  Page->>RAF: request next callback
+```
+
 The Sound setting is a mute toggle plus a volume slider (a `GainNode` after the worklet, ramped to avoid clicks). Speed, volume, and mute are saved with the other settings in `localStorage`. While paused (Pause button or `P`), frames are not stepped, the core state is untouched, and the deadline restarts on resume. The run-state indicator shows LOADING, RUNNING, PAUSED, or ERROR.
 
 ## Data flow

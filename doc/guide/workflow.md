@@ -37,4 +37,6 @@ The React app is responsible for UI, canvas rendering, and browser integration. 
 
 The docs site lives under the `doc/` folder and is built with VitePress. `.github/workflows/deploy-docs.yml` publishes it to GitHub Pages on the custom domain `pecten.app`, with the docs under `/docs/`.
 
+Diagrams are Mermaid fenced code blocks (rendered by `vitepress-plugin-mermaid`), so they stay in the Markdown next to the text they illustrate.
+
 User Manual screenshots are WebP files in `doc/manual/images/`. Take them from the app running the MIT-licensed test ROMs in `rust/tests/fixtures/gba-tests/`, never from commercial games.
