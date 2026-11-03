@@ -21,7 +21,11 @@ Sound plays at the same speed as the game, so its pitch rises at Fast and Super 
 
 ## Shaders
 
-Effects that make the picture look like the Game Boy Advance's own LCD screen, as players and modders often add to older games. Off is the default. Each option adds one effect to the one before it:
+Effects that make the picture look like the Game Boy Advance's own LCD screen, as players and modders often add to older games. Off is the default.
+
+![The Shaders setting, with LCD + Blur selected](./images/settings-shaders.webp)
+
+Each option adds one effect to the one before it:
 
 | Option | Effect |
 | --- | --- |
