@@ -19,6 +19,7 @@ export type FeaturedGame = {
 /** Known cartridges shown in the home page cover flow. ROMs are never bundled: they come from the library or a file the player picks. */
 export const FEATURED_GAMES: FeaturedGame[] = [
   { id: 'pokemon-ruby', title: 'Pokémon Ruby', year: 2002, boxArtName: 'Pokemon - Ruby Version (USA, Europe)', aliases: ['Pokemon - Ruby Version', 'Pokemon - Version Rubis'] },
+  { id: 'diamond-hands', title: 'Diamond Hands', year: 2026, boxArtName: 'Diamond Hands (USA)', aliases: ['Diamond Hands'] },
   { id: 'golden-sun', title: 'Golden Sun', year: 2001, boxArtName: 'Golden Sun (USA, Europe)', aliases: ['Golden Sun'] },
   { id: 'super-mario-advance-4', title: 'Super Mario Advance 4', year: 2003, boxArtName: 'Super Mario Advance 4 - Super Mario Bros. 3 (USA)', aliases: ['Super Mario Advance 4 - Super Mario Bros. 3'] },
   { id: 'donkey-kong-country', title: 'Donkey Kong Country', year: 2003, boxArtName: 'Donkey Kong Country (USA)', aliases: ['Donkey Kong Country'] },
