@@ -1809,6 +1809,12 @@ impl ThumbCpu {
                 write_decompressed(memory, self.registers[1], &data, unit_size);
                 Ok(())
             }
+            0x1F => {
+                let frequency = memory.read_u32(self.registers[0].wrapping_add(4));
+                self.registers[0] =
+                    midi_key_to_frequency(frequency, self.registers[1], self.registers[2]);
+                Ok(())
+            }
             _ => Err(CpuError::UnsupportedBiosCall {
                 address,
                 state,
@@ -2128,6 +2134,14 @@ pub(crate) fn affine_matrix(scale_x: i32, scale_y: i32, angle: u16) -> [i32; 4] 
         (scale_y * sine) >> 14,
         (scale_y * cosine) >> 14,
     ]
+}
+
+/// BIOS `MidiKey2Freq`: `frequency / 2^((180 - key - fine / 256) / 12)`, where key 180
+/// plays the sample at its recorded rate. Evaluated in single precision; results may
+/// differ from the BIOS lookup tables in the lowest bits.
+fn midi_key_to_frequency(frequency: u32, key: u32, fine_pitch: u32) -> u32 {
+    let semitones = 180.0 - key as f32 - fine_pitch as f32 / 256.0;
+    (frequency as f32 / (semitones / 12.0).exp2()) as u32
 }
 
 /// BIOS `ArcTan` polynomial for a 1.14 fixed-point tangent. Returns the angle
@@ -3059,7 +3073,7 @@ mod tests {
     #[test]
     fn unsupported_thumb_swi_is_reported_explicitly() {
         let mut memory = MemoryMap::new();
-        memory.load_cartridge(&program(&[0xDF1F])); // MidiKey2Freq
+        memory.load_cartridge(&program(&[0xDF10])); // BitUnPack
         let mut cpu = ThumbCpu::new(ROM_BASE);
 
         assert_eq!(
@@ -3067,10 +3081,40 @@ mod tests {
             Err(CpuError::UnsupportedBiosCall {
                 address: ROM_BASE,
                 state: ExecutionState::Thumb,
-                service: 0x1F,
+                service: 0x10,
             })
         );
         assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn thumb_swi_midi_key_to_freq_scales_the_wave_data_frequency() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xDF1F, 0xDF1F, 0xDF1F]));
+        memory.write_u32(0x0200_0004, 44_100 << 10); // WaveData.freq
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+
+        // Key 180 plays the sample at its recorded rate.
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 180;
+        cpu.registers[2] = 0;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 44_100 << 10);
+
+        // One octave lower halves it.
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 168;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 44_100 << 9);
+
+        // A full semitone of fine pitch matches the next key.
+        cpu.registers[0] = 0x0200_0000;
+        cpu.registers[1] = 155;
+        cpu.registers[2] = 256;
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[0], 44_100 << 8);
+        assert_eq!(cpu.registers[1], 155);
+        assert_eq!(cpu.registers[15], ROM_BASE + 6);
     }
 
     #[test]

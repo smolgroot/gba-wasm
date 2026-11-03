@@ -82,6 +82,7 @@ Unsupported services return `CpuError::UnsupportedBiosCall` with the address, st
 | `0x11`, `0x12` | LZ77UnCompWram/Vram | The VRAM variant writes halfwords. |
 | `0x13` | HuffUnComp | 4- and 8-bit data units, written as words. |
 | `0x14`, `0x15` | RLUnCompWram/Vram | The VRAM variant writes halfwords. |
+| `0x1F` | MidiKey2Freq | `r0` = `WaveData.freq / 2^((180 - r1 - r2/256) / 12)`, with the frequency read from `r0 + 4`. Computed in single-precision floating point, so the low bits may differ from the BIOS tables. |
 
 The decompression services ignore the header's type field, as the BIOS does, and do nothing when the source lies in the BIOS region (`0x00000000`-`0x00003FFF`), as the BIOS protection does.
 
@@ -93,7 +94,7 @@ Halt and IntrWait put the CPU into a halted state that skips directly to the nex
 
 ### Not implemented
 
-SoftReset (`0x00`), Stop (`0x03`), GetBiosChecksum (`0x0D`), BitUnPack (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), SoundBias and the sound driver calls (`0x19`-`0x24`, `0x28`-`0x2A`), MultiBoot (`0x25`), HardReset (`0x26`), and CustomHalt (`0x27`). Games that call them stop with an `UnsupportedBiosCall` error naming the service.
+SoftReset (`0x00`), Stop (`0x03`), GetBiosChecksum (`0x0D`), BitUnPack (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), SoundBias and the sound driver calls (`0x19`-`0x1E`, `0x20`-`0x24`, `0x28`-`0x2A`), MultiBoot (`0x25`), HardReset (`0x26`), and CustomHalt (`0x27`). Games that call them stop with an `UnsupportedBiosCall` error naming the service.
 
 ## Timing
 
@@ -101,4 +102,4 @@ SoftReset (`0x00`), Stop (`0x03`), GetBiosChecksum (`0x0D`), BitUnPack (`0x10`),
 
 ## Tests
 
-Unit tests in `rust/src/cpu.rs`, `rust/src/bios.rs`, `rust/src/memory.rs`, and `rust/src/lib.rs` cover the BIOS latch, the vector layout, IRQ entry and return through the dispatcher, Halt waking on the exact VBlank request, VBlankIntrWait running the game's IRQ handler, IntrWait with flags already set, RegisterRamReset regions and register groups (including rejected flags), CpuSet and CpuFastSet, ArcTan2 quadrants, Bg/ObjAffineSet, and the LZ77, Huffman, and run-length decoders. Div, Sqrt, and ArcTan have no dedicated unit tests. The jsmolka/gba-tests `bios.gba` suite is not used: it checks values read from the real BIOS image ([Testing Strategy](./testing-strategy.md)).
+Unit tests in `rust/src/cpu.rs`, `rust/src/bios.rs`, `rust/src/memory.rs`, and `rust/src/lib.rs` cover the BIOS latch, the vector layout, IRQ entry and return through the dispatcher, Halt waking on the exact VBlank request, VBlankIntrWait running the game's IRQ handler, IntrWait with flags already set, RegisterRamReset regions and register groups (including rejected flags), CpuSet and CpuFastSet, ArcTan2 quadrants, Bg/ObjAffineSet, MidiKey2Freq, and the LZ77, Huffman, and run-length decoders. Div, Sqrt, and ArcTan have no dedicated unit tests. The jsmolka/gba-tests `bios.gba` suite is not used: it checks values read from the real BIOS image ([Testing Strategy](./testing-strategy.md)).
