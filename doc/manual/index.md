@@ -60,6 +60,6 @@ Clearing the site data in your browser deletes all of it. Use **Download .sav** 
 ## Next steps
 
 - [Saved Games](./saves.md): automatic saves, save states, and moving saves between emulators
-- [Settings](./settings.md): game speed, sound, touch controls, haptics, and themes
+- [Settings](./settings.md): game speed, shaders, sound, touch controls, haptics, and themes
 - [Desktop and Mobile Play](./play-modes.md): keyboard play and the portrait and landscape touch layouts
 - [Controls and Shortcuts](./controls.md): every key binding

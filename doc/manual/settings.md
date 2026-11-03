@@ -21,7 +21,7 @@ Sound plays at the same speed as the game, so its pitch rises at Fast and Super 
 
 ## Shaders
 
-Effects that make the picture look like the Game Boy Advance's own LCD screen:
+Effects that make the picture look like the Game Boy Advance's own LCD screen, as players and modders often add to older games. Off is the default. Each option adds one effect to the one before it:
 
 | Option | Effect |
 | --- | --- |
@@ -30,7 +30,15 @@ Effects that make the picture look like the Game Boy Advance's own LCD screen:
 | LCD | Colour, plus the thin dark grid between the screen's pixels |
 | LCD + Blur | LCD, plus each frame blended with the previous one, like the screen's slow response |
 
-The blur also smooths the flicker some games use for transparency, such as Golden Sun's Psynergy effects. The grid fades out when the game is shown too small for the lines to be drawn sharply. Shaders need WebGL2; without it the game shows the raw pixels. Screenshots in the library and save slots are always the raw pixels.
+The blur also smooths the flicker some games use for transparency, such as Golden Sun's Psynergy effects, which otherwise shimmer on a modern screen. Fast-moving scenes look slightly smeared with it, as on the original console.
+
+The change shows at once, even while the game is paused, so you can compare the options on the same frame.
+
+::: info Good to know
+- **The grid needs a large picture.** It is drawn at your screen's full resolution and fades out when each GBA pixel covers fewer than about four screen pixels, for example in a small browser window on a standard-resolution monitor. Phones and high-resolution laptop screens show it. When it has faded out, LCD looks the same as Colour.
+- **Browser support:** the shaders use WebGL2, available in current versions of Chrome, Edge, Firefox, and Safari (15 and later). Without it the game shows the raw pixels.
+- **Screenshots** in the library and in save slots are always the raw pixels, whatever you choose here.
+:::
 
 ## Sound
 

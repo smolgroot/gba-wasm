@@ -8,7 +8,7 @@ Start with the [User Manual](./manual/index.md):
 
 - [Getting Started](./manual/index.md): loading ROMs, the library, installing the app
 - [Saved Games](./manual/saves.md): automatic saves, save states, importing and exporting `.sav` files
-- [Settings](./manual/settings.md): game speed, sound, touch controls, haptics, themes
+- [Settings](./manual/settings.md): game speed, shaders, sound, touch controls, haptics, themes
 - [Desktop and Mobile Play](./manual/play-modes.md): keyboard play, portrait and landscape touch layouts
 - [Controls and Shortcuts](./manual/controls.md): key bindings and shortcuts
 
