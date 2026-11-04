@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FEATURED_GAMES, buildShowcase, displayGameTitle, normalizeGameTitle } from './featuredGames'
+import { FEATURED_GAMES, boxArtSources, buildShowcase, displayGameTitle, gbaBoxArtUrl, normalizeGameTitle } from './featuredGames'
 import type { SavedGame } from './savedGames'
 
 function savedGame(name: string, playedAt = 0): SavedGame {
@@ -42,5 +42,15 @@ describe('buildShowcase', () => {
     const recent = savedGame('Golden Sun (France)', 2)
     const showcase = buildShowcase([], [recent, savedGame('Golden Sun (USA, Europe)', 1)])
     expect(showcase).toEqual([{ id: 'saved:goldensun', title: 'Golden Sun', featured: undefined, saved: recent }])
+  })
+})
+
+describe('boxArtSources', () => {
+  it('tries the bundled cover before the libretro thumbnail for featured games', () => {
+    expect(boxArtSources('Diamond Hands (World)', '/gba/')).toEqual(['/gba/boxart/diamond-hands.webp', gbaBoxArtUrl('Diamond Hands (World)')])
+  })
+
+  it('only uses the libretro thumbnail for unknown games', () => {
+    expect(boxArtSources('Some Other Game (USA)')).toEqual([gbaBoxArtUrl('Some Other Game (USA)')])
   })
 })

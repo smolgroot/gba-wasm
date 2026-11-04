@@ -11,7 +11,7 @@ import ChevronLeft from '@mui/icons-material/ChevronLeft'
 import ChevronRight from '@mui/icons-material/ChevronRight'
 import PlayArrowRounded from '@mui/icons-material/PlayArrowRounded'
 import FileUploadOutlined from '@mui/icons-material/FileUploadOutlined'
-import { gbaBoxArtUrl, type ShowcaseItem } from './featuredGames'
+import { boxArtSources, type ShowcaseItem } from './featuredGames'
 import { VelocityTracker, clamp, inertiaTarget, isAtRest, stepSpring, withOverscroll } from './coverFlowMotion'
 
 const AUTOPLAY_INTERVAL_MS = 3500
@@ -22,7 +22,7 @@ const AUTOPLAY_INTERVAL_MS = 3500
  */
 function coverSources(item: ShowcaseItem) {
   if (item.featured) return [`${import.meta.env.BASE_URL}boxart/${item.featured.id}.webp`]
-  return [item.saved && gbaBoxArtUrl(item.saved.name), item.saved?.screenshot].filter((source): source is string => Boolean(source))
+  return [...(item.saved ? boxArtSources(item.saved.name, import.meta.env.BASE_URL) : []), item.saved?.screenshot].filter((source): source is string => Boolean(source))
 }
 
 function formatPlayedDate(timestamp: number) {

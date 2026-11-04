@@ -12,7 +12,7 @@ import { TOUCH_THEMES, isTouchTheme, type TouchTheme } from './touchThemes'
 import { AudioOutput } from './audio'
 import { isHapticStrength, type HapticStrength } from './haptics'
 import { createScreenRenderer, isScreenShader, usesWebGl, type ScreenRenderer, type ScreenShader } from './screenShaders'
-import { FEATURED_GAMES, buildShowcase, gbaBoxArtUrl, type ShowcaseItem } from './featuredGames'
+import { FEATURED_GAMES, boxArtSources, buildShowcase, type ShowcaseItem } from './featuredGames'
 import { CoverFlow } from './CoverFlow'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: PectenEmulator; rom: Uint8Array; romHash: string; backupType: string }
@@ -165,19 +165,22 @@ function GithubMark() {
 }
 
 function GameBoxArt({ name, fallback, alt, className }: { name: string; fallback: string; alt: string; className?: string }) {
-  const [showFallback, setShowFallback] = useState(false)
-  return <img className={className} src={showFallback ? fallback || `${import.meta.env.BASE_URL}logo.png` : gbaBoxArtUrl(name)} alt={alt} onError={() => setShowFallback(true)} />
+  const sources = [...boxArtSources(name, import.meta.env.BASE_URL), fallback || `${import.meta.env.BASE_URL}logo.png`]
+  const [failed, setFailed] = useState(0)
+  return <img className={className} src={sources[Math.min(failed, sources.length - 1)]} alt={alt} onError={() => setFailed((count) => count + 1)} />
 }
 
 function CartridgeMockup({ name }: { name: string }) {
-  const [showBoxArt, setShowBoxArt] = useState(true)
+  const sources = boxArtSources(name, import.meta.env.BASE_URL)
+  const [failed, setFailed] = useState(0)
+  const showBoxArt = failed < sources.length
 
   return (
     <div className="cartridge-mockup" aria-label={`Cartridge: ${name}`}>
       <div className="cartridge-grip" />
       <div className="cartridge-label">
         {showBoxArt ? (
-          <img src={gbaBoxArtUrl(name)} alt={`${name} box art`} onError={() => setShowBoxArt(false)} />
+          <img src={sources[failed]} alt={`${name} box art`} onError={() => setFailed((count) => count + 1)} />
         ) : <><span>CARTRIDGE</span><strong>{name}</strong><small>GAME BOY ADVANCE</small></>}
       </div>
       <div className="cartridge-contacts" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>

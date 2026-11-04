@@ -40,6 +40,21 @@ export function displayGameTitle(name: string) {
   return name.replace(/\s*(\([^)]*\)|\[[^\]]*\])/g, '').trim() || name
 }
 
+/** The bundled cover thumbnail of a featured cartridge. */
+export function localBoxArtUrl(game: FeaturedGame, baseUrl = '/') {
+  return `${baseUrl}boxart/${game.id}.webp`
+}
+
+/**
+ * Cover images to try in order for a ROM name: the bundled thumbnail when it is a featured cartridge (homebrew
+ * such as Diamond Hands has no libretro art), then the libretro thumbnail.
+ */
+export function boxArtSources(name: string, baseUrl = '/', featured: FeaturedGame[] = FEATURED_GAMES) {
+  const title = normalizeGameTitle(name)
+  const match = featured.find((game) => game.aliases.some((alias) => normalizeGameTitle(alias) === title))
+  return [...(match ? [localBoxArtUrl(match, baseUrl)] : []), gbaBoxArtUrl(name)]
+}
+
 /** One cover in the home page cover flow. */
 export type ShowcaseItem = {
   id: string
