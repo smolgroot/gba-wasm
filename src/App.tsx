@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ArrowDownToLine, ArrowLeft, Blend, BookOpen, ChevronRight, CodeXml, Download, Feather, Gamepad2, Grid3x3, HardDrive, House, Info, Menu, Palette, Pause, Play, Rabbit, Rocket, Save, Settings, Square, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, Blend, BookOpen, ChevronRight, Clock, CodeXml, Download, Feather, Gamepad2, Grid3x3, HardDrive, House, Info, Menu, Palette, Pause, Play, Rabbit, Rocket, Save, Search, Settings, Square, Star, Upload, Trash2, Turtle, VibrateOff, Volume2, VolumeX, X, Zap, type LucideProps } from 'lucide-react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { loadPecten, type PectenEmulator } from './wasmBridge'
-import { deleteSavedGame, getSavedGames, saveGame, updateSavedGameScreenshot, type SavedGame } from './savedGames'
+import { deleteSavedGame, getSavedGames, saveGame, setSavedGameFavorite, updateSavedGameScreenshot, type SavedGame } from './savedGames'
 import { deleteSuspendState, hashRom, loadBackup, loadStates, loadSuspendState, STATE_SLOTS, storeBackup, storeState, SUSPEND_SLOT, validateSaveFile, type StoredState } from './backupStorage'
 import { useLeaveGuard } from './leaveGuard'
 import { attachKeyboard } from './keypad'
@@ -14,10 +14,13 @@ import { isHapticStrength, type HapticStrength } from './haptics'
 import { createScreenRenderer, isScreenShader, usesWebGl, type ScreenRenderer, type ScreenShader } from './screenShaders'
 import { FEATURED_GAMES, boxArtSources, buildShowcase, type ShowcaseItem } from './featuredGames'
 import { CoverFlow } from './CoverFlow'
+import { addPlayTime, formatPlayTime, getAllPlayTimes, getPlayTime } from './playStats'
+import { arrangeLibrary, type LibraryFilter, type LibrarySort } from './libraryView'
 
 type ActiveGame = { launchId: number; name: string; status: string; pixels: Uint8ClampedArray; emulator: PectenEmulator; rom: Uint8Array; romHash: string; backupType: string }
 type Toast = { id: number; message: string; tone: 'info' | 'error' }
 const TOAST_DURATION_MS = 2500
+const PLAY_TIME_TICK_MS = 1000
 type SaveFlushRef = { current: (() => void) | null }
 const DOCS_URL = '/docs/'
 const SOURCE_URL = 'https://github.com/smolgroot/pecten'
@@ -361,8 +364,21 @@ function App() {
   }, [])
 
   async function removeGame(id: string) {
-    await deleteSavedGame(id)
-    setSavedGames(await getSavedGames())
+    try {
+      await deleteSavedGame(id)
+      setSavedGames(await getSavedGames())
+    } catch (error) {
+      setAppStatus(`Could not remove the game: ${describeError(error).message}`)
+    }
+  }
+
+  async function toggleFavorite(game: SavedGame) {
+    try {
+      await setSavedGameFavorite(game.id, !game.favorite)
+      setSavedGames(await getSavedGames())
+    } catch (error) {
+      setAppStatus(`Could not update favorites: ${describeError(error).message}`)
+    }
   }
 
   const triggerLoad = () => {
@@ -397,7 +413,7 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
           <Route path="/play" element={<EmulatorPage key={activeGame?.launchId ?? 'empty'} game={activeGame} status={appStatus} errorLog={romLoadLog} settings={settings} onSettingsChange={updateSettings} onLoad={triggerLoad} onRuntimeError={setAppStatus} flushSaveRef={flushSaveRef} onRestart={restartGame} onSnapshot={updateLibraryScreenshot} />} />
-          <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} />} />
+          <Route path="/saved-games" element={<SavedGamesPage games={savedGames} onResume={resumeGame} onRemove={removeGame} onToggleFavorite={toggleFavorite} />} />
           <Route path="*" element={<HomePage savedGames={savedGames} onLoad={triggerLoad} onResume={resumeGame} onQuickStart={quickStart} />} />
         </Routes>
       </main>
@@ -674,6 +690,26 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [game])
 
+  // Counts time the game is actually running: not while paused, hidden, or stopped by an error.
+  useEffect(() => {
+    if (!game) return
+    let last = performance.now()
+    const tick = () => {
+      const now = performance.now()
+      const elapsed = now - last
+      last = now
+      // A long gap means the device slept or the timer was throttled; do not count it.
+      if (elapsed > PLAY_TIME_TICK_MS * 3) return
+      if (pausedRef.current || runtimeErrorRef.current || document.visibilityState !== 'visible') return
+      addPlayTime(game.name, elapsed)
+    }
+    const timer = window.setInterval(tick, PLAY_TIME_TICK_MS)
+    return () => {
+      window.clearInterval(timer)
+      tick()
+    }
+  }, [game])
+
   // Keyboard and touch input are tracked separately and combined, so neither releases the other's buttons.
   const keyboardKeysRef = useRef(0)
   const touchKeysRef = useRef(0)
@@ -866,6 +902,7 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   const cartridgeDetails = <>
     <CartridgeMockup key={game.name} name={game.name} />
     <p>ROM loaded into the WebAssembly runtime.</p>
+    <PlayTime name={game.name} />
     <button className="secondary-button wide-button" onClick={() => { setShowDetails(false); onLoad() }}><ArrowDownToLine size={17} /> Replace ROM</button>
     <div className="keyboard-note"><span>CONTROLS</span><div>{KEYBOARD_CONTROLS.map(([key, button]) => <span className="control" key={button}><kbd>{key}</kbd><small>{button}</small></span>)}</div></div>
   </>
@@ -1002,26 +1039,77 @@ function EmulatorPage({ game, status, errorLog, settings, onSettingsChange, onLo
   )
 }
 
-function SavedGamesPage({ games, onResume, onRemove }: { games: SavedGame[]; onResume: (game: SavedGame) => void; onRemove: (id: string) => void }) {
+/** Total time played, refreshed while shown so it counts up during play. */
+function PlayTime({ name }: { name: string }) {
+  const [total, setTotal] = useState(() => getPlayTime(name))
+  useEffect(() => {
+    const timer = window.setInterval(() => setTotal(getPlayTime(name)), 5000)
+    return () => window.clearInterval(timer)
+  }, [name])
+  return <div className="play-time"><Clock size={15} aria-hidden="true" /><span>TIME PLAYED</span><strong>{formatPlayTime(total)}</strong></div>
+}
+
+const LIBRARY_SORT_OPTIONS: { sort: LibrarySort; label: string }[] = [
+  { sort: 'recent', label: 'Recently played' },
+  { sort: 'name', label: 'Name' },
+  { sort: 'playTime', label: 'Most played' },
+]
+
+function SavedGamesPage({ games, onResume, onRemove, onToggleFavorite }: { games: SavedGame[]; onResume: (game: SavedGame) => void; onRemove: (id: string) => void | Promise<void>; onToggleFavorite: (game: SavedGame) => void | Promise<void> }) {
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<LibraryFilter>('all')
+  const [sort, setSort] = useState<LibrarySort>('recent')
+  const [pendingRemoval, setPendingRemoval] = useState<SavedGame | null>(null)
+  // Read once per mount: the library is not open while a game runs.
+  const [playTimes] = useState(getAllPlayTimes)
+  const favoriteCount = games.filter((game) => game.favorite).length
+  const visible = arrangeLibrary(games, { query, filter, sort }, playTimes)
+  const filtering = query.trim() !== '' || filter !== 'all'
+
   return (
     <section className="saved-page">
       <div className="saved-heading"><div><p className="eyebrow">LOCAL LIBRARY</p><h1>Saved games</h1><p>Your ROMs and play snapshots stay on this device.</p></div><span className="library-count">{String(games.length).padStart(2, '0')}<small>GAMES</small></span></div>
-      {games.length ? (
-        <div className="saved-list">{games.map((game) => (
+      {games.length > 0 && <div className="library-toolbar">
+        <div className="library-tabs" role="group" aria-label="Show">
+          <button type="button" className={filter === 'all' ? 'speed-option active' : 'speed-option'} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All <small>{games.length}</small></button>
+          <button type="button" className={filter === 'favorites' ? 'speed-option active' : 'speed-option'} aria-pressed={filter === 'favorites'} onClick={() => setFilter('favorites')}><Star size={13} /> Favorites <small>{favoriteCount}</small></button>
+        </div>
+        <label className="library-search"><Search size={15} aria-hidden="true" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search games" aria-label="Search games" /></label>
+        <label className="library-sort"><span>SORT</span><select value={sort} onChange={(event) => setSort(event.target.value as LibrarySort)}>{LIBRARY_SORT_OPTIONS.map(({ sort: value, label }) => <option key={value} value={value}>{label}</option>)}</select></label>
+      </div>}
+      {games.length === 0 ? (
+        <div className="empty-saved"><div className="empty-emulator-icon"><HardDrive size={27} /></div><h2>No saved games yet</h2>
+          <p>Load a ROM and it will appear here with a screenshot and play date.</p><Link className="primary-button" to="/"><ArrowDownToLine size={18} /> Go to home</Link>
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="empty-saved"><div className="empty-emulator-icon">{filter === 'favorites' && !query.trim() ? <Star size={27} /> : <Search size={27} />}</div>
+          <h2>{filter === 'favorites' && !query.trim() ? 'No favorites yet' : 'No games match'}</h2>
+          <p>{filter === 'favorites' && !query.trim() ? 'Tap the star on a game to pin it to the top of your library.' : 'Try another search, or show all games.'}</p>
+          {filtering && <button className="secondary-button" onClick={() => { setQuery(''); setFilter('all') }}>Show all games</button>}
+        </div>
+      ) : (
+        <div className="saved-list">{visible.map((game) => (
           <article className="saved-row" key={game.id}>
             <button className="saved-art" onClick={() => onResume(game)} aria-label={`Play ${game.name}`}>
             <img src={game.screenshot || `${import.meta.env.BASE_URL}logo.png`} alt={game.screenshot ? `${game.name} screenshot` : `Preview unavailable for ${game.name}`} /><span><Gamepad2 size={15} /> PLAY</span>
             </button>
             <div className="saved-info"><h2>{game.name}</h2><p>Last played {formatSavedDate(game.playedAt)}</p></div>
-            <div className="saved-date"><span>LAST PLAYED</span><time dateTime={new Date(game.playedAt).toISOString()}>{formatSavedDate(game.playedAt)}</time></div>
-            <button className="delete-button" onClick={() => void onRemove(game.id)} aria-label={`Remove ${game.name}`} title="Remove game"><Trash2 size={18} /></button>
+            <div className="saved-date"><span>TIME PLAYED</span><time>{formatPlayTime(playTimes[game.name] ?? 0)}</time></div>
+            <button className={game.favorite ? 'favorite-button active' : 'favorite-button'} onClick={() => void onToggleFavorite(game)} aria-pressed={Boolean(game.favorite)} aria-label={`${game.favorite ? 'Remove from favorites:' : 'Add to favorites:'} ${game.name}`} title={game.favorite ? 'Remove from favorites' : 'Add to favorites'}><Star size={18} fill={game.favorite ? 'currentColor' : 'none'} /></button>
+            <button className="delete-button" onClick={() => setPendingRemoval(game)} aria-label={`Remove ${game.name}`} title="Remove game"><Trash2 size={18} /></button>
           </article>
         ))}</div>
-      ) : (
-        <div className="empty-saved"><div className="empty-emulator-icon"><HardDrive size={27} /></div><h2>No saved games yet</h2>
-          <p>Load a ROM and it will appear here with a screenshot and play date.</p><Link className="primary-button" to="/"><ArrowDownToLine size={18} /> Go to home</Link>
-        </div>
       )}
+      {pendingRemoval && <div className="settings-backdrop" role="presentation" onMouseDown={() => setPendingRemoval(null)}>
+        <section className="settings-modal leave-modal" role="dialog" aria-modal="true" aria-labelledby="remove-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="settings-modal-heading"><div><p className="eyebrow">LIBRARY</p><h2 id="remove-title">Remove game?</h2></div><button className="modal-close" onClick={() => setPendingRemoval(null)} aria-label="Cancel"><X size={18} /></button></div>
+          <p>{pendingRemoval.name} will be removed from your library. Its saves and play time are kept and come back if you load the same ROM again.</p>
+          <div className="leave-actions">
+            <button type="button" className="secondary-button" onClick={() => setPendingRemoval(null)} autoFocus>Keep it</button>
+            <button type="button" className="primary-button danger-button" onClick={() => { const { id } = pendingRemoval; setPendingRemoval(null); void onRemove(id) }}><Trash2 size={17} /> Remove</button>
+          </div>
+        </section>
+      </div>}
     </section>
   )
 }

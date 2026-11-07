@@ -4,6 +4,8 @@ export type SavedGame = {
   playedAt: number
   screenshot: string
   rom: ArrayBuffer
+  /** Pinned to the top of the library. Absent on entries stored before favorites existed. */
+  favorite?: boolean
 }
 
 // Named before the rename to Pecten; kept so stored data stays readable.
@@ -64,5 +66,21 @@ export async function deleteSavedGame(id: string) {
     const request = database.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(id)
     request.onsuccess = () => { database.close(); resolve() }
     request.onerror = () => { database.close(); reject(request.error) }
+  })
+}
+
+export async function setSavedGameFavorite(id: string, favorite: boolean) {
+  const database = await openDatabase()
+  return new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readwrite')
+    const store = transaction.objectStore(STORE_NAME)
+    const request = store.get(id)
+    request.onsuccess = () => {
+      const game = request.result as SavedGame | undefined
+      if (game) store.put({ ...game, favorite })
+    }
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error) }
+    transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error('Updating the library was aborted by the browser.')) }
   })
 }

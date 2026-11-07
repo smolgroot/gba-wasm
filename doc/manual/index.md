@@ -28,14 +28,19 @@ Scroll the covers by dragging, swiping, using the horizontal scroll wheel or tra
 
 ## Your library
 
-**Saved games** in the header opens the library: every ROM you have loaded, with a screenshot and the last time you played it. Click a game's picture to play it, or the bin icon to remove it.
+**Saved games** in the header opens the library: every ROM you have loaded, with a screenshot and the last time you played it. Click a game's picture to play it.
 
 ![The Saved games library](./images/library-desktop.webp)
+
+- **Star** a game to make it a favorite. Favorites stay at the top of the list, and the **Favorites** tab shows only them.
+- **Search** by name, and **sort** by recently played, name, or most played.
+- The **bin icon** removes a game after you confirm.
+- Each row shows the **time played**. The same figure appears in the game's **Details** (the side card on the play screen). It counts only while the game runs: not while paused, in a background tab, or after an error.
 
 The picture of a game is updated each time the game saves or you save a state, so it shows where you left off.
 
 ::: warning
-Removing a game from the library deletes the ROM copy, not its saves. If you load the same ROM again, its save and save states come back, because they are tied to the ROM contents (see [Saved Games](./saves.md)).
+Removing a game from the library deletes the ROM copy, not its saves or its play time. If you load the same ROM again, its save and save states come back, because they are tied to the ROM contents (see [Saved Games](./saves.md)).
 :::
 
 ## Install as an app
@@ -54,6 +59,7 @@ If you dismiss the prompt, it is not offered again for 14 days. It never appears
 | ROM library | IndexedDB `gba-wasm-library` | nothing; one browser on one device |
 | Game saves and save states | IndexedDB `gba-wasm-saves` | every library entry of the same ROM |
 | Settings | `localStorage` | every game |
+| Play time | `localStorage` | every library entry of the same game name |
 
 Clearing the site data in your browser deletes all of it. Use **Download .sav** to keep a copy of important saves ([Saved Games](./saves.md#export-a-save)).
 
