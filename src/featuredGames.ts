@@ -20,6 +20,7 @@ export type FeaturedGame = {
 export const FEATURED_GAMES: FeaturedGame[] = [
   { id: 'pokemon-ruby', title: 'Pokémon Ruby', year: 2002, boxArtName: 'Pokemon - Ruby Version (USA, Europe)', aliases: ['Pokemon - Ruby Version', 'Pokemon - Version Rubis'] },
   { id: 'diamond-hands', title: 'Diamond Hands', year: 2026, boxArtName: 'Diamond Hands (USA)', aliases: ['Diamond Hands'] },
+  { id: 'goodboy-galaxy', title: 'Goodboy Galaxy', year: 2023, boxArtName: 'Goodboy Galaxy (World)', aliases: ['Goodboy Galaxy'] },
   { id: 'golden-sun', title: 'Golden Sun', year: 2001, boxArtName: 'Golden Sun (USA, Europe)', aliases: ['Golden Sun'] },
   { id: 'super-mario-advance-4', title: 'Super Mario Advance 4', year: 2003, boxArtName: 'Super Mario Advance 4 - Super Mario Bros. 3 (USA)', aliases: ['Super Mario Advance 4 - Super Mario Bros. 3'] },
   { id: 'donkey-kong-country', title: 'Donkey Kong Country', year: 2003, boxArtName: 'Donkey Kong Country (USA)', aliases: ['Donkey Kong Country'] },

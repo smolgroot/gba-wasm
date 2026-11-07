@@ -25,7 +25,39 @@ A passing test suite does not imply general commercial-ROM compatibility. Do not
 - `DONE` PSG and DirectSound audio streamed to the browser at 32,768 Hz.
 - `DONE` Robustness: seeded fuzz tests show random cartridge code, random I/O writes, and corrupted save states produce errors, never core panics (which abort the WASM instance). Frontend tests run with Vitest (`pnpm test`).
 
-Wait states, the prefetch buffer, serial/link hardware, and several BIOS services (BIOS-02) are not implemented.
+Wait states, the prefetch buffer, serial/link hardware, the cartridge RTC and other GPIO devices, and several BIOS services (BIOS-02) are not implemented.
+
+## Roadmap
+
+Work the stories in this order. Measurement comes before timing work: wait states and the prefetch buffer change every game's behavior and cost performance, so the mgba-suite score (TEST-01), the local smoke run (COMPAT-02), and a performance baseline (PERF-01) must exist first to show whether a change helps or regresses.
+
+| Order | Story | Priority | Why now |
+| --- | --- | --- | --- |
+| 1 | [CPU-04](#cpu-04-accept-every-encoding-the-arm7tdmi-executes) Accept every encoding the ARM7TDMI executes | `P1` | A rejected Thumb `BX` encoding stops a ROM in its first frames; one-line class of bug. |
+| 2 | [TEST-01](#test-01-run-the-mgba-test-suite-in-cargo-test) Run the mGBA test suite in `cargo test` | `P1` | Gives a per-suite pass count to drive and verify all later accuracy work. |
+| 3 | [COMPAT-02](#compat-02-local-smoke-run-over-a-rom-directory) Local smoke run over a ROM directory | `P1` | Catches crashes in real games without committing ROMs. |
+| 4 | [BIOS-02](#bios-02-close-hle-bios-compatibility-gaps) Close HLE BIOS gaps | `P1` | Unsupported SWIs (notably `SoftReset`) end the game. |
+| 5 | [CART-01](#cart-01-emulate-the-cartridge-real-time-clock) Cartridge real-time clock | `P1` | Pokémon Ruby/Sapphire/Emerald time events depend on it. |
+| 6 | [PERF-01](#perf-01-measure-and-protect-emulation-speed) Measure and protect emulation speed | `P1` | Some ROMs run at ~1.3× real time natively; timing work will cost more. |
+| 7 | [TIME-02](#time-02-memory-wait-states) Memory wait states | `P1` | Largest accuracy gap: every access costs the same today. |
+| 8 | [TIME-03](#time-03-gamepak-prefetch-buffer) GamePak prefetch buffer | `P2` | Completes cartridge timing once TIME-02 lands. |
+| 9 | [DMA-01](#dma-01-implement-dma-and-interrupt-delivery) DMA timing and video capture | `P2` | Builds on TIME-02 access costs. |
+| 10 | [ROM-03](#rom-03-model-reads-beyond-the-rom-image) Reads beyond the ROM image | `P2` | Small; checked by test ROMs and some games. |
+| 11 | [CPU-05](#cpu-05-undefined-instruction-exception) Undefined-instruction exception | `P2` | Hardware behavior instead of a fatal error. |
+| 12 | [SAVE-03](#save-03-per-game-overrides) Per-game overrides | `P2` | Save type and RTC for ROMs whose strings mislead detection. |
+| 13 | [COMPAT-01](#compat-01-track-a-reproducible-homebrew-compatibility-set) Homebrew compatibility set and CI | `P2` | Runs the suites from TEST-01/TEST-02 on every push. |
+| 14 | [TEST-02](#test-02-add-further-redistributable-test-roms) Further test ROMs | `P2` | Widens coverage once the harness pattern exists. |
+| 15 | [PPU-03](#ppu-03-close-ppu-fidelity-gaps) PPU fidelity gaps | `P2` | Affine/bitmap mosaic, object cycle limits, mid-line changes. |
+| 16 | [AUDIO-02](#audio-02-close-audio-fidelity-gaps) Audio fidelity gaps | `P2` | `SOUNDBIAS` resolution, band limiting. |
+| 17 | [INPUT-02](#input-02-gamepad-input) Gamepad input | `P2` | Frontend only; independent of core work. |
+| 18 | [UI-02](#ui-02-rewind) Rewind | `P2` | Builds on save states. |
+| 19 | [BOOT-03](#boot-03-optional-user-provided-bios) Optional user-provided BIOS | `P2` | Reference for HLE behavior; unlocks `bios.gba`. |
+| 20 | [CHEAT-01](#cheat-01-cheat-codes) Cheat codes | `P2` | |
+| 21 | [CART-02](#cart-02-other-gpio-devices) Other GPIO devices | `P2` | Solar, gyro, tilt, rumble: few titles. |
+| 22 | [LINK-01](#link-01-serial-port-and-link-cable) Serial port and link cable | `P2` | Large; needs a transport design. |
+| 23 | [DBG-01](#dbg-01-developer-views) Developer views | `P2` | Memory, tile, OAM, and I/O viewers. |
+
+Frontend stories (INPUT-02, UI-02) can run in parallel with the core stories at any point.
 
 ## Completed stories
 
@@ -301,7 +333,7 @@ Acceptance criteria:
 - Deliver interrupt requests through CPU exception state with tested priority and return behavior.
 - Add deterministic tests for transfers, trigger conditions, and interrupt entry/return.
 
-Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatcher are implemented and tested. Sound FIFO DMA is implemented ([Audio](doc/rust-core/apu.md)). Remaining: video capture timing and validation against selected target ROMs.
+Immediate, VBlank, and HBlank DMA and IRQ entry/return through the BIOS dispatcher are implemented and tested. Sound FIFO DMA is implemented ([Audio](doc/rust-core/apu.md)). Remaining: video capture timing and validation against selected target ROMs. After TIME-02, charge transfers the wait states of their source and destination regions, model the start-up delay and CPU/DMA interleaving, and verify with the TEST-01 DMA suite.
 
 ### AUDIO-01: Implement GBA audio output
 
@@ -317,10 +349,57 @@ Acceptance criteria:
 
 All four PSG channels and both DirectSound FIFOs, including sound DMA, are implemented and mixed at 32,768 Hz ([Audio](doc/rust-core/apu.md)). Rust tests cover sample generation. `src/audio.test.ts` runs the worklet processor directly (prebuffering, fade-out on underrun and while paused, the latency bound, playback rate, ring wrap) and checks the `AudioOutput` lifecycle against a fake Web Audio API (resume only while suspended, cleanup when the worklet fails to load, teardown). The App's gesture listeners were checked by hand in headless Chrome.
 
+### CPU-04: Accept every encoding the ARM7TDMI executes
+
+**Status:** `NEXT`
+**Priority:** `P1`
+**Depends on:** CPU-03
+
+As a user, I want ROMs that contain unusual but valid encodings to keep running instead of stopping with `UnsupportedInstruction`.
+
+Acceptance criteria:
+
+- Thumb high-register `BX` (`0x4700`-`0x477F`) branches whatever bit 7 (H1) and bits 0-2 hold, as the ARM7TDMI ignores them. `0x470A` at `0x080A19EA` stops Pokémon Silver Moon (a ROM hack, not vendored) at frame 13 today.
+- Audit every decoder path that returns `UnsupportedInstruction`/`UnsupportedArmInstruction` for a valid encoding and record, per path, either the hardware behavior with a reference or why the error is correct (for example: genuinely undefined, coprocessor).
+- Add a unit test for each relaxed encoding, using synthetic opcodes.
+
+### TEST-01: Run the mGBA test suite in `cargo test`
+
+**Status:** `BACKLOG`
+**Priority:** `P1`
+**Depends on:** ROM-02
+
+As a developer, I want the [mgba-emu/suite](https://github.com/mgba-emu/suite) test ROM (MIT) scored automatically, so accuracy work is measured against the reference emulator's own tests rather than by playing games.
+
+The suite has no prebuilt release, and it has no run-all mode. A menu lists its suites in this order: memory, I/O read, timing, timers, timer IRQ, shifter, carry, multiply long, BIOS math, DMA, SIO read, SIO timing, misc. edge case, video. Pressing A runs a suite. When the mGBA debug registers answer, the suite logs `BEGIN: <name>` and `END: <passed>/<total>` through them (`0x04FFF780` enable: write `0xC0DE`, read back `0x1DEA`; `0x04FFF600` 256-byte string buffer; writing `0x04FFF700` with bit 8 set emits the buffer at log level `value & 7`). It also writes text lines to SRAM.
+
+Acceptance criteria:
+
+- Build `suite.gba` from a pinned commit with the repository's `docker-build.sh` (devkitARM). Vendor the binary, the MIT license, and a README recording the commit and build command under `rust/tests/fixtures/mgba-suite/`, as for gba-tests.
+- Implement the mGBA debug-log registers in the core as an opt-in device (off by default; enabled by a `GbaCore` setting the harness turns on). The device collects log lines for the host and does not change behavior when it is disabled; the browser build leaves it off. Unit-test the enable handshake, the string buffer, and the flush.
+- Add `rust/tests/mgba_suite.rs`. For each suite it boots the ROM, navigates the menu with timed key presses through `set_pressed_keys`/`step_frame`, waits for the `END:` line within a frame budget, then parses the pass count.
+- Commit the current per-suite pass counts as the baseline. The test fails when a count drops below its baseline and prints a reminder to raise the baseline when it rises, so the suite is a ratchet rather than all-or-nothing.
+- Document the harness, the baseline, and the suites that cannot pass under HLE (BIOS-dependent values) in [Testing Strategy](doc/rust-core/testing-strategy.md).
+
+### COMPAT-02: Local smoke run over a ROM directory
+
+**Status:** `BACKLOG`
+**Priority:** `P1`
+**Depends on:** ROM-02
+
+As a developer, I want one command that runs every ROM in a local directory headlessly and reports crashes, so regressions in real games are visible without committing any ROM.
+
+Acceptance criteria:
+
+- Add a Cargo example (for example `cargo run --release --example smoke -- <dir> [frames]`) that, for each `.gba` file, runs a fixed number of frames with a deterministic input script (periodic Start and A), and reports: the first core error with its frame, whether the frame changed, the share of non-silent audio, the detected backup type, and speed relative to real time.
+- Output is a stable plain-text table suitable for diffing between commits.
+- It reads ROMs only from the given path. Nothing it produces is committed except the tool itself. `rom/` stays git-ignored.
+- Document it in [Testing Strategy](doc/rust-core/testing-strategy.md#commercial-roms) without naming results for commercial titles as compatibility claims.
+
 ### BIOS-02: Close HLE BIOS compatibility gaps
 
 **Status:** `BACKLOG`
-**Priority:** `P2`
+**Priority:** `P1`
 **Depends on:** BOOT-01
 
 As a user, I want games that use common BIOS services to keep running instead of stopping with `UnsupportedBiosCall`.
@@ -347,6 +426,216 @@ Acceptance criteria:
 - Record per-ROM boot, video, input, audio, save, and known-failure status.
 - Run automated instruction/frame regressions in CI where practical.
 - Report compatibility per tested title and feature; do not use an unsupported universal compatibility claim.
+- Add a CI workflow that runs `cargo test` (including TEST-01 and TEST-02) and `pnpm test` on every push and pull request; the deploy workflow alone does not run tests.
+
+### CART-01: Emulate the cartridge real-time clock
+
+**Status:** `BACKLOG`
+**Priority:** `P1`
+**Depends on:** BUS-01, SAVE-01
+
+As a user playing a game with a clock chip, I want the in-game time to work, so time-based events run and the game does not report a dead battery.
+
+Acceptance criteria:
+
+- Model the GPIO port at `0x080000C4`-`0x080000C9` (data, direction, read-enable control) without changing ROM reads while GPIO reads are disabled.
+- Model the Seiko S-3511A protocol: reset, status, date/time and time-only reads, status writes, and BCD encoding.
+- Enable the RTC by detection (the `SIIRTC_V` library string) or through SAVE-03 overrides. Time comes from a host-supplied clock, so tests stay deterministic.
+- Save RTC state in save states (with a `STATE_VERSION` bump) and keep the clock offset with the game's save data.
+- Unit-test the serial protocol, BCD values, and the read-enable gate.
+
+### PERF-01: Measure and protect emulation speed
+
+**Status:** `BACKLOG`
+**Priority:** `P1`
+**Depends on:** COMPAT-02
+
+As a user on a phone, I want games to run at full speed, and as a developer I want to know what each accuracy change costs.
+
+Acceptance criteria:
+
+- Add a benchmark that runs deterministic workloads natively (the vendored test ROMs plus a CPU-bound synthetic loop with no idle-loop skipping) and reports emulated frames per second.
+- Measure the same workloads in the WASM build in a headless browser and record the ratio to native.
+- Record the baseline in the docs. TIME-02 and TIME-03 must report their effect on it.
+- Profile the slowest workload and record the top hot paths (instruction decode, memory dispatch, per-step event bookkeeping) as follow-up candidates. Do not optimize by changing emulated behavior.
+
+### TIME-02: Memory wait states
+
+**Status:** `BACKLOG`
+**Priority:** `P1`
+**Depends on:** TEST-01, PERF-01
+
+As a user, I want instructions to take as long as on hardware, so games run at their real speed, including their slowdown, and timing-sensitive code behaves correctly.
+
+Acceptance criteria:
+
+- Charge each instruction fetch and data access the cost of its region and width: BIOS/IWRAM/I/O/OAM 1 cycle; palette and VRAM 1 cycle, with 32-bit accesses split into two halfwords; EWRAM 3 wait states; GamePak and SRAM from `WAITCNT` (WS0-WS2 first-access and sequential settings, SRAM setting).
+- Distinguish non-sequential and sequential accesses as the ARM7TDMI's access sequence does, including the internal cycles already modeled.
+- Writes to `WAITCNT` take effect immediately. The reset value matches the HLE boot state.
+- Verify against the TEST-01 memory and timing suites. The `timing` pass count must rise and no suite may regress.
+- Record the change in COMPAT-02 output and PERF-01 numbers.
+
+### TIME-03: GamePak prefetch buffer
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** TIME-02
+
+Acceptance criteria:
+
+- Model the 8-halfword prefetch buffer enabled by `WAITCNT` bit 14, including how it fills during internal cycles and non-ROM accesses and how a non-sequential ROM access or branch empties it.
+- Verify with the TEST-01 timing suite and document any approximation.
+
+### ROM-03: Model reads beyond the ROM image
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** BUS-01
+
+Acceptance criteria:
+
+- Reads in the GamePak windows beyond the image size return the open-bus value the cartridge address bus leaves (`(address / 2) & 0xFFFF` per halfword), not `0xFF`, with a reference.
+- Keep EEPROM and GPIO windows unchanged. Unit-test halfword and word reads past the end.
+
+### CPU-05: Undefined-instruction exception
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** CPU-04
+
+Acceptance criteria:
+
+- Undefined ARM and Thumb encodings and coprocessor instructions enter Undefined mode through vector `0x04` with the correct banked `LR`/`SPSR`, as the hardware does.
+- The HLE BIOS image handles the vector as the hardware BIOS does, documented with a reference.
+- Offer an optional strict mode, kept for tests and fuzzing, that reports these as errors as today.
+
+### SAVE-03: Per-game overrides
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** SAVE-01, CART-01
+
+Acceptance criteria:
+
+- Add a small table keyed by game code (header `0xAC`) that can force the save type, EEPROM size, Flash chip ID, and RTC presence. Every entry needs a reason and a source.
+- Overrides take precedence over string detection. A user setting can force the save type for a ROM.
+- Unit-test lookup and precedence with synthetic headers.
+
+### TEST-02: Add further redistributable test ROMs
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** TEST-01
+
+Acceptance criteria:
+
+- Evaluate other test ROMs (for example the remaining jsmolka/gba-tests suites `ppu`, `save`, and `nes`, armwrestler, and hardware-test collections from other emulator projects). Vendor only those whose license permits redistribution, with provenance recorded as for gba-tests.
+- Each vendored ROM gets an automated pass criterion: a result register, a debug-log line, or a frame hash of a verified-correct screen.
+- Record ROMs that cannot pass under HLE (such as `bios.gba`) and which story would unblock them.
+
+### PPU-03: Close PPU fidelity gaps
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** PPU-02, TEST-01
+
+Acceptance criteria:
+
+- Implement mosaic on affine and bitmap backgrounds, per-line object cycle limits with `DISPCNT` bit 5, and green swap. Each is covered by a focused pixel test.
+- Decide, with a measured cost, whether to model mid-line register changes, and record the decision in [GPU Core](doc/rust-core/gpu-core.md).
+- The TEST-01 video suite must not regress.
+
+### AUDIO-02: Close audio fidelity gaps
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** AUDIO-01
+
+Acceptance criteria:
+
+- Model the `SOUNDBIAS` level and the amplitude resolution and sampling-rate settings.
+- Band-limit PSG output so high square and noise frequencies do not alias, and document the filter.
+- Keep sample generation deterministic, with tests for each change.
+
+### INPUT-02: Gamepad input
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** INPUT-01
+
+Acceptance criteria:
+
+- Map the browser Gamepad API (standard mapping) to the GBA buttons, combined with keyboard and touch input.
+- Disconnecting a gamepad, or losing focus, cannot leave buttons stuck.
+- Vitest tests use a stubbed `navigator.getGamepads`. Allow remapping keyboard and gamepad buttons in Settings.
+
+### UI-02: Rewind
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** SAVE-02
+
+Acceptance criteria:
+
+- Keep a bounded ring of periodic snapshots with a documented memory budget, and step back through them while a rewind control is held.
+- Rewinding never changes the game's own save file. Audio is muted while rewinding.
+- Test the ring bounds and that resuming after rewind replays identically to the original run.
+
+### BOOT-03: Optional user-provided BIOS
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** BOOT-01
+
+Acceptance criteria:
+
+- Accept a user-supplied 16 KiB BIOS image, validated by size and checksum, stored locally and never bundled or uploaded.
+- With it, boot from the reset vector through the real boot sequence and route `SWI` to the image. HLE remains the default.
+- Use it to compare HLE services against the hardware BIOS in local runs, and run `bios.gba` when it is present.
+
+### CHEAT-01: Cheat codes
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** BUS-01
+
+Acceptance criteria:
+
+- Support raw address/value patches applied each frame, then GameShark/Action Replay and CodeBreaker formats, including decryption.
+- Cheats are per ROM, can be toggled, and are not part of save states unless a test shows they must be.
+
+### CART-02: Other GPIO devices
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** CART-01
+
+Acceptance criteria:
+
+- Add the solar sensor, gyro, tilt sensor, and rumble on the CART-01 GPIO port, enabled through SAVE-03 overrides, each with a browser input (slider, device motion, vibration) and a unit-tested protocol.
+
+### LINK-01: Serial port and link cable
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** TIME-02
+
+Acceptance criteria:
+
+- Model `SIOCNT`/`SIODATA`/`RCNT` modes (normal, multiplayer, UART, general-purpose) with transfer timing and the serial IRQ, verified by the TEST-01 SIO suites.
+- With no peer connected, a transfer behaves as on hardware with nothing plugged in.
+- Design the browser transport (two tabs, then network) in a separate document before implementing peers.
+
+### DBG-01: Developer views
+
+**Status:** `BACKLOG`
+**Priority:** `P2`
+**Depends on:** TEST-01
+
+Acceptance criteria:
+
+- Expose read-only inspection through the WASM boundary: CPU registers, memory ranges, I/O registers, tiles, palettes, OAM, and the TEST-01 debug-log lines.
+- Inspection never advances or changes emulated state. Add a browser panel behind a developer setting.
 
 ## Development workflow
 

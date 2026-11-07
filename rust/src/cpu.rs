@@ -384,7 +384,7 @@ impl ThumbCpu {
             return 1;
         }
 
-        if opcode & 0x0FFF_FFF0 == 0x012F_FF10 || opcode & 0x0E00_0000 == 0x0A00_0000 {
+        if opcode & 0x0FF0_00F0 == 0x0120_0010 || opcode & 0x0E00_0000 == 0x0A00_0000 {
             return 3;
         }
         if opcode & 0x0F00_0000 == 0x0F00_0000 {
@@ -521,7 +521,8 @@ impl ThumbCpu {
             return Ok(());
         }
 
-        if opcode & 0x0FFF_FFF0 == 0x012F_FF10 {
+        // ARM7TDMI decodes BX/MRS/MSR from bits 27-20 and 7-4; the SBO/SBZ fields are ignored.
+        if opcode & 0x0FF0_00F0 == 0x0120_0010 {
             let target = self.read_register((opcode & 0xF) as usize, ExecutionState::Arm, address);
             self.branch_exchange(target);
             return Ok(());
@@ -542,10 +543,10 @@ impl ThumbCpu {
         if opcode & 0x0E00_0090 == 0x0000_0090 && opcode & 0x60 != 0 {
             return self.arm_halfword_transfer(memory, opcode, address);
         }
-        if opcode & 0x0FBF_0FFF == 0x010F_0000 {
+        if opcode & 0x0FB0_00F0 == 0x0100_0000 {
             return self.arm_mrs(opcode, address);
         }
-        if opcode & 0x0FB0_FFF0 == 0x0120_F000 || opcode & 0x0FB0_F000 == 0x0320_F000 {
+        if opcode & 0x0FB0_00F0 == 0x0120_0000 || opcode & 0x0FB0_0000 == 0x0320_0000 {
             return self.arm_msr(opcode, address);
         }
         if opcode & 0x0C00_0000 == 0 {
@@ -1401,16 +1402,8 @@ impl ThumbCpu {
                         self.registers[destination] = right;
                     }
                 }
-                3 => {
-                    if opcode & 0x0087 != 0 {
-                        return Err(CpuError::UnsupportedInstruction {
-                            address,
-                            state: ExecutionState::Thumb,
-                            opcode,
-                        });
-                    }
-                    self.branch_exchange(right);
-                }
+                // ARM7TDMI ignores H1 and the Rd field for BX (no BLX on ARMv4T).
+                3 => self.branch_exchange(right),
                 _ => unreachable!(),
             }
             return Ok(());
@@ -2649,6 +2642,24 @@ mod tests {
     }
 
     #[test]
+    fn thumb_bx_ignores_h1_and_rd_bits() {
+        // BX r0 with Rd=1, BX r0 with H1+Rd=7, BX lr with H1+Rd=7.
+        for opcode in [0x4701u16, 0x4787, 0x47F7] {
+            let mut memory = MemoryMap::new();
+            memory.load_cartridge(&program(&[opcode]));
+            let mut cpu = ThumbCpu::new(ROM_BASE);
+            let source = usize::from((opcode >> 3) & 0xF);
+            cpu.registers[source] = ROM_BASE + 0x41;
+
+            cpu.step(&mut memory).unwrap();
+
+            assert!(cpu.is_thumb(), "opcode {opcode:04X}");
+            assert_eq!(cpu.registers[15], ROM_BASE + 0x40, "opcode {opcode:04X}");
+            assert_eq!(cpu.registers[7], 0, "Rd bits must not be written");
+        }
+    }
+
+    #[test]
     fn thumb_bl_prefix_and_suffix_branch_and_save_return_address() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0xF000, 0xF802]));
@@ -3604,6 +3615,35 @@ mod tests {
         ));
         assert_eq!(cpu.cpsr, original_cpsr);
         assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn arm_bx_mrs_msr_ignore_sbo_and_sbz_fields() {
+        // BX r0 with SBO bits 19-8 cleared.
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE120_0010));
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[0] = ROM_BASE + 0x21;
+        cpu.step(&mut memory).unwrap();
+        assert!(cpu.is_thumb());
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x20);
+
+        // MRS r2, CPSR with SBO bits 19-16 cleared and SBZ bits 11-0 set.
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE100_2F0F));
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.step(&mut memory).unwrap();
+        assert_eq!(cpu.registers[2], cpu.cpsr);
+
+        // MSR CPSR_f, r0 / MSR CPSR_f, #0xF0000000 with SBO bits 15-12 cleared.
+        for opcode in [0xE128_0F00u32, 0xE328_020F] {
+            let mut memory = MemoryMap::new();
+            memory.load_cartridge(&arm_word(opcode));
+            let mut cpu = ThumbCpu::boot_hle();
+            cpu.registers[0] = 0xF000_0000;
+            cpu.step(&mut memory).unwrap();
+            assert_eq!(cpu.cpsr & 0xF000_0000, 0xF000_0000, "opcode {opcode:08X}");
+        }
     }
 
     #[test]
