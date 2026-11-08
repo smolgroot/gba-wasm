@@ -1,9 +1,10 @@
 use crate::bios::IRQ_VECTOR;
-use crate::memory::{BIOS_LATCH_AFTER_SWI, IME_ADDR, MemoryMap};
+use crate::memory::{BIOS_LATCH_AFTER_SWI, IME_ADDR, IWRAM_SIZE, MemoryMap};
 use crate::state::{State, StateError, StateReader, StateWriter, impl_state};
 use std::fmt;
 
 pub const ROM_BASE: u32 = 0x0800_0000;
+const EWRAM_BASE: u32 = 0x0200_0000;
 pub const MAX_FRAME_INSTRUCTIONS: u32 = 1_000_000;
 
 const CPSR_THUMB: u32 = 1 << 5;
@@ -1606,6 +1607,35 @@ impl ThumbCpu {
         memory.write_u16(crate::memory::DISPCNT_ADDR, 0x0080);
     }
 
+    /// SoftReset (GBATEK "SWI 00h"; mGBA's hle-bios.s `SoftReset`). The entry flag at
+    /// `0x03007FFA` is read before the top `0x200` bytes of IWRAM (stacks, IRQ handler
+    /// pointer, BIOS flags) are cleared. The CPU ends in System mode, ARM state, with the
+    /// boot stacks, zeroed r0-r12, `LR_svc`/`SPSR_svc`/`LR_irq`/`SPSR_irq`, and `LR` set to
+    /// the entry. Flags are left clear; GBATEK does not specify them.
+    fn soft_reset(&mut self, memory: &mut MemoryMap) {
+        let enters_ewram = memory.iwram[IWRAM_SIZE - 6] != 0;
+        memory.iwram[IWRAM_SIZE - 0x200..].fill(0);
+
+        self.switch_mode(CPSR_SYSTEM_MODE);
+        self.cpsr = CPSR_SYSTEM_MODE;
+        self.registers[..13].fill(0);
+        self.registers[13] = HLE_SYSTEM_STACK;
+        self.irq_bank = [HLE_IRQ_STACK, 0];
+        self.svc_bank = [HLE_SVC_STACK, 0];
+        for mode in [CPSR_IRQ_MODE, CPSR_SVC_MODE] {
+            if let Some(index) = Self::spsr_index(mode) {
+                self.spsr_bank[index] = 0;
+            }
+        }
+
+        let entry = if enters_ewram { EWRAM_BASE } else { ROM_BASE };
+        self.registers[14] = entry;
+        self.registers[15] = entry;
+        self.halt = None;
+        self.intr_wait_resumed = false;
+        self.idle_loop = None;
+    }
+
     fn cpu_set(&self, memory: &mut MemoryMap) {
         let control = self.registers[2];
         let word_transfer = control & (1 << 26) != 0;
@@ -1699,6 +1729,10 @@ impl ThumbCpu {
         // The hardware BIOS returns from every service through the same opcode.
         memory.set_bios_latch(BIOS_LATCH_AFTER_SWI);
         match service {
+            0x00 => {
+                self.soft_reset(memory);
+                Ok(())
+            }
             0x01 if self.registers[0] & !0xFF == 0 => {
                 self.register_ram_reset(memory, self.registers[0]);
                 Ok(())
@@ -3246,6 +3280,65 @@ mod tests {
         ));
         assert!(memory.ewram.iter().all(|byte| *byte == 0xA5));
         assert_eq!(cpu.registers[15], ROM_BASE);
+    }
+
+    #[test]
+    fn soft_reset_restarts_at_rom_in_system_mode_with_boot_stacks() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x0000, 0xDF00])); // MOVS r0, r0; SWI 0x00
+        memory.iwram.fill(0xA5);
+        memory.iwram[0x7FFA] = 0; // entry flag: ROM
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.cpsr |= CPSR_THUMB | FLAG_N | FLAG_Z | FLAG_C | FLAG_V;
+        cpu.registers[..15].fill(0xDEAD_BEEF);
+        cpu.registers[15] = ROM_BASE + 2;
+        cpu.svc_bank = [1, 2];
+        cpu.irq_bank = [3, 4];
+        cpu.spsr_bank = [5; 5];
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(
+            cpu.cpsr, CPSR_SYSTEM_MODE,
+            "ARM state, System mode, IRQs enabled"
+        );
+        assert_eq!(cpu.registers[..13], [0; 13]);
+        assert_eq!(cpu.registers[13], 0x0300_7F00);
+        assert_eq!(cpu.registers[14], ROM_BASE);
+        assert_eq!(cpu.registers[15], ROM_BASE);
+        assert_eq!(cpu.irq_bank, [0x0300_7FA0, 0]);
+        assert_eq!(cpu.svc_bank, [0x0300_7FE0, 0]);
+        assert_eq!(
+            cpu.spsr_bank,
+            [5, 0, 0, 5, 5],
+            "only the IRQ and SVC SPSRs are cleared"
+        );
+        assert!(memory.iwram[0x7E00..].iter().all(|byte| *byte == 0));
+        assert!(memory.iwram[..0x7E00].iter().all(|byte| *byte == 0xA5));
+    }
+
+    #[test]
+    fn soft_reset_from_irq_mode_enters_ewram_when_flag_is_set() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xEF00_0000)); // SWI 0x00
+        memory.iwram[0x7FFA] = 1; // entry flag: EWRAM
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.enter_exception(CPSR_IRQ_MODE, ROM_BASE, 0x1234);
+        cpu.registers[13] = 0x0300_7000;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.cpsr, CPSR_SYSTEM_MODE);
+        assert_eq!(cpu.registers[13], 0x0300_7F00);
+        assert_eq!(cpu.registers[14], 0x0200_0000);
+        assert_eq!(cpu.registers[15], 0x0200_0000);
+        assert_eq!(
+            cpu.irq_bank,
+            [0x0300_7FA0, 0],
+            "the IRQ bank is reset, not saved"
+        );
+        assert_eq!(cpu.spsr_bank[1], 0);
+        assert_eq!(memory.iwram[0x7FFA], 0, "the flag itself is cleared");
     }
 
     #[test]

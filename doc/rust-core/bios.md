@@ -67,6 +67,7 @@ Unsupported services return `CpuError::UnsupportedBiosCall` with the address, st
 
 | SWI | Service | Notes |
 | --- | --- | --- |
+| `0x00` | SoftReset | Reads the entry flag at `0x03007FFA`, clears `0x03007E00`-`0x03007FFF` (stacks, IRQ handler pointer, BIOS flags), zeroes r0-r12 and `LR`/`SPSR` of IRQ and Supervisor mode, resets the three boot stacks, and restarts in System mode and ARM state at EWRAM (`0x02000000`) when the flag is nonzero, otherwise at the ROM (`0x08000000`), with `LR` set to that entry ([GBATEK SWI 00h](https://problemkaputt.de/gbatek.htm#biosresetfunctions)). The flags are left clear. |
 | `0x01` | RegisterRamReset | Clears the regions selected by `r0`: EWRAM, IWRAM except its top `0x200` bytes (the stacks and BIOS variables), palette, VRAM, OAM, and the serial, sound, and other register groups. Reserved flags (bits 8 and up) are rejected. |
 | `0x02` | Halt | Waits for `IE & IF != 0`. |
 | `0x04` | IntrWait | Sets `IME`, then waits until the game's IRQ handler sets a requested bit (`r1`) in the BIOS flags at `0x03007FF8`, and clears it. With `r0 != 0`, previously set flags are discarded first. |
@@ -94,7 +95,7 @@ Halt and IntrWait put the CPU into a halted state that skips directly to the nex
 
 ### Not implemented
 
-SoftReset (`0x00`), Stop (`0x03`), GetBiosChecksum (`0x0D`), BitUnPack (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), SoundBias and the sound driver calls (`0x19`-`0x1E`, `0x20`-`0x24`, `0x28`-`0x2A`), MultiBoot (`0x25`), HardReset (`0x26`), and CustomHalt (`0x27`). Games that call them stop with an `UnsupportedBiosCall` error naming the service.
+Stop (`0x03`), GetBiosChecksum (`0x0D`), BitUnPack (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), SoundBias and the sound driver calls (`0x19`-`0x1E`, `0x20`-`0x24`, `0x28`-`0x2A`), MultiBoot (`0x25`), HardReset (`0x26`), and CustomHalt (`0x27`). Games that call them stop with an `UnsupportedBiosCall` error naming the service.
 
 ## Timing
 

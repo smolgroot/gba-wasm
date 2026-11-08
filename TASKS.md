@@ -400,7 +400,7 @@ Acceptance criteria:
 
 ### BIOS-02: Close HLE BIOS compatibility gaps
 
-**Status:** `BACKLOG`
+**Status:** `IN PROGRESS`
 **Priority:** `P1`
 **Depends on:** BOOT-01
 
@@ -408,7 +408,7 @@ As a user, I want games that use common BIOS services to keep running instead of
 
 Acceptance criteria:
 
-- Implement `SoftReset` (`0x00`), which many games call for their button-combination reset: it resets the stacks and the top of IWRAM and restarts at the ROM or EWRAM entry chosen by the byte at `0x03007FFA`.
+- Implement `SoftReset` (`0x00`), which many games call for their button-combination reset: it resets the stacks and the top of IWRAM and restarts at the ROM or EWRAM entry chosen by the byte at `0x03007FFA`. Done ([HLE BIOS](doc/rust-core/bios.md#services)), with unit tests for both entries and for a call from IRQ mode.
 - Implement `SoundBias` (`0x19`), `BitUnPack` (`0x10`), the Diff8/Diff16 unfilters (`0x16`-`0x18`), `MidiKey2Freq` (`0x1F`), and `GetBiosChecksum` (`0x0D`), each with a focused unit test.
 - Make `CpuSet` and `CpuFastSet` ignore sources in the BIOS region, as the decompression services already do.
 - Save the BIOS latch in save states (with a `STATE_VERSION` bump) so restored states replay identically, as SAVE-02 requires.
