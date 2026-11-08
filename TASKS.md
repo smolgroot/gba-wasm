@@ -351,7 +351,7 @@ All four PSG channels and both DirectSound FIFOs, including sound DMA, are imple
 
 ### CPU-04: Accept every encoding the ARM7TDMI executes
 
-**Status:** `NEXT`
+**Status:** `DONE`
 **Priority:** `P1`
 **Depends on:** CPU-03
 
@@ -363,9 +363,11 @@ Acceptance criteria:
 - Audit every decoder path that returns `UnsupportedInstruction`/`UnsupportedArmInstruction` for a valid encoding and record, per path, either the hardware behavior with a reference or why the error is correct (for example: genuinely undefined, coprocessor).
 - Add a unit test for each relaxed encoding, using synthetic opcodes.
 
+Thumb `BX` ignores H1 and Rd (including `0x470A`). ARM `BX`/`MRS`/`MSR`/`SWP` and `MUL`'s Rn ignore their SBO/SBZ fields, and Thumb `PUSH {}`/`POP {}` follow the ARMv4 empty-list rule. Each relaxed encoding has a unit test in `rust/src/cpu.rs`. The remaining error paths are recorded with reasons in [Rejected encodings](doc/rust-core/thumb-cpu.md#rejected-encodings), and a test pins the rejected Thumb set over all 65,536 opcodes. Pokémon Silver Moon itself was not re-run (not vendored).
+
 ### TEST-01: Run the mGBA test suite in `cargo test`
 
-**Status:** `BACKLOG`
+**Status:** `NEXT`
 **Priority:** `P1`
 **Depends on:** ROM-02
 

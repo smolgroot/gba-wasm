@@ -35,11 +35,32 @@ All ARMv4T ARM and Thumb instruction classes are implemented, including multiply
 
 - PC reads as instruction address + 8 (ARM) or + 4 (Thumb), and + 12 for ARM register-specified shifts and stored PC values. Only Thumb `LDR rd, [pc, #]` and `ADD rd, pc, #` word-align it.
 - Misaligned `LDR` rotates the word, misaligned `LDRH` rotates the halfword by 8, and misaligned `LDRSH` loads a sign-extended byte.
-- `LDM`/`STM` with an empty list transfers PC and moves the base by `0x40`. A stored base is the original value only when it is the first register in the list. A loaded base overrides writeback.
+- `LDM`/`STM` with an empty list transfers PC and moves the base by `0x40` ([GBATEK](https://problemkaputt.de/gbatek.htm#armopcodesmemoryblockdatatransferldmstm) ARM.11/THUMB.15). Thumb `PUSH {}`/`POP {}` follow the same rule, since they are `STMDB`/`LDMIA sp!`, as in NanoBoyAdvance's `Thumb_PushPop`. A stored base is the original value only when it is the first register in the list. A loaded base overrides writeback.
 - Thumb `POP {pc}` and ARM loads into PC do not change state (no ARMv5 interworking).
 - `CMP`/`CMN`/`TST`/`TEQ` with `Rd = pc` and S set copy SPSR to CPSR without writing PC. In User and System mode, which have no SPSR, CPSR is left unchanged.
+- Should-be-one and should-be-zero fields are not decoded, as the ARM7TDMI selects instructions from ARM bits 27-20 and 7-4 only (the decode table mGBA and NanoBoyAdvance also use): ARM `BX` (bits 19-8), `MRS`/`MSR` (bits 19-16, 15-12, 11-0), `SWP` (bits 11-8), and `MUL`'s unused Rn (bits 15-12). Thumb `BX` ignores H1 and the Rd bits (bits 7 and 2-0); ARMv4T has no `BLX`.
 
-Encodings that are undefined on ARMv4T (the NV condition, coprocessor instructions, ARMv5 forms), `MSR` writes that change the T bit or select an invalid mode, and unpredictable PC/base combinations return `UnsupportedArmInstruction`/`UnsupportedInstruction`. The error carries the address, state, and opcode, and leaves PC at the faulting instruction. Undefined-instruction exceptions are not raised.
+### Rejected encodings
+
+Every path that returns `UnsupportedArmInstruction`/`UnsupportedInstruction` was audited for CPU-04. The error carries the address, state, and opcode, and leaves PC at the faulting instruction. Undefined-instruction exceptions are not raised yet (CPU-05).
+
+| Encoding | Why it is an error |
+| --- | --- |
+| ARM condition `NV` (`0xF`) | Reserved on ARMv3 and later; the ARMv4 manual leaves it UNPREDICTABLE. |
+| ARM coprocessor space (bits 27-25 `110`, or `1110`) | The GBA has no coprocessor, so the ARM7TDMI takes the undefined-instruction trap. |
+| ARM bits 27-25 `011` with bit 4 set | The architecturally undefined instruction space. |
+| ARM `TST`/`TEQ`/`CMP`/`CMN` without S that are not `BX`/`MRS`/`MSR` | Undefined on ARMv4T (ARMv5 uses this space for `CLZ`, `BKPT`, and the DSP forms). |
+| ARM register-shift operands with bit 7 set that are not multiply, `SWP`, or halfword transfers | The undefined part of the multiply/extra-load space. |
+| ARM halfword transfer with L=0 and S=1 | `LDRD`/`STRD` exist only on ARMv5TE; undefined on ARMv4T. |
+| `MUL`/`MLA`/long multiply with a PC operand, `RdHi == RdLo`; `SWP` with a PC operand | UNPREDICTABLE in the ARMv4 manual, with no documented ARM7TDMI result. |
+| Load/store or `LDM`/`STM` with PC as a written-back or block base | UNPREDICTABLE. |
+| `MRS`/`MSR` on SPSR in User or System mode; `MRS` into PC | UNPREDICTABLE: those modes have no SPSR. |
+| `MSR` that changes the T bit or selects an invalid mode | UNPREDICTABLE on ARMv4T. |
+| Thumb `0xB100`-`0xB3FF`, `0xB600`-`0xBBFF`, `0xBE00`-`0xBFFF` | Undefined on ARMv4T (ARMv5+ uses some for `BKPT` and others). |
+| Thumb `0xDE00`-`0xDEFF` (`B` with condition AL) | Undefined on ARMv4T. |
+| Thumb `0xE800`-`0xEFFF` | The ARMv5 `BLX` suffix, which is undefined on ARMv4T. |
+
+`thumb_rejects_exactly_the_armv4t_undefined_encodings` steps all 65,536 Thumb opcodes and pins the rejected set to the Thumb rows above. Relaxing an UNPREDICTABLE row needs a failing ROM and a hardware reference.
 
 ## Errors
 

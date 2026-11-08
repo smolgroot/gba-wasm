@@ -403,7 +403,7 @@ impl ThumbCpu {
             let signed = opcode & (1 << 22) != 0;
             return 2 + multiply_array_cycles(multiplier, signed) + ((opcode >> 21) & 1);
         }
-        if opcode & 0x0FB0_0FF0 == 0x0100_0090 {
+        if opcode & 0x0FB0_00F0 == 0x0100_0090 {
             return 4;
         }
         if opcode & 0x0E00_0090 == 0x0000_0090 {
@@ -537,7 +537,8 @@ impl ThumbCpu {
         if opcode & 0x0F80_00F0 == 0x0080_0090 {
             return self.arm_multiply_long(opcode, address);
         }
-        if opcode & 0x0FB0_0FF0 == 0x0100_0090 {
+        // SWP's SBZ bits 11-8 are not decoded, as for BX/MRS/MSR above.
+        if opcode & 0x0FB0_00F0 == 0x0100_0090 {
             return self.arm_swap(memory, opcode, address);
         }
         if opcode & 0x0E00_0090 == 0x0000_0090 && opcode & 0x60 != 0 {
@@ -686,7 +687,13 @@ impl ThumbCpu {
             ((opcode >> 8) & 0xF) as usize,
             ((opcode >> 12) & 0xF) as usize,
         ];
-        if destination == 15 || operands.contains(&15) {
+        // MUL does not read Rn (bits 15-12, SBZ), so only MLA rejects it as PC.
+        let read_operands = if accumulate {
+            &operands[..]
+        } else {
+            &operands[..2]
+        };
+        if destination == 15 || read_operands.contains(&15) {
             return Err(Self::unsupported_arm(address, opcode));
         }
 
@@ -1173,12 +1180,12 @@ impl ThumbCpu {
             let registers = u32::from(opcode & 0x00FF);
             let include_lr = opcode & 0x0100 != 0;
             let register_count = registers.count_ones() + u32::from(include_lr);
+            // PUSH is STMDB sp!: an empty list stores PC (as Thumb STMIA) and moves SP by 16 words.
             if register_count == 0 {
-                return Err(CpuError::UnsupportedInstruction {
-                    address,
-                    state: ExecutionState::Thumb,
-                    opcode,
-                });
+                let new_stack = self.registers[13].wrapping_sub(0x40);
+                memory.write_u32(new_stack & !3, address.wrapping_add(6));
+                self.registers[13] = new_stack;
+                return Ok(());
             }
             let new_stack = self.registers[13].wrapping_sub(register_count * 4);
             let mut address = new_stack;
@@ -1201,12 +1208,11 @@ impl ThumbCpu {
             let registers = u32::from(opcode & 0x00FF);
             let include_pc = opcode & 0x0100 != 0;
             let register_count = registers.count_ones() + u32::from(include_pc);
+            // POP is LDMIA sp!: an empty list loads PC (staying in Thumb) and moves SP by 16 words.
             if register_count == 0 {
-                return Err(CpuError::UnsupportedInstruction {
-                    address,
-                    state: ExecutionState::Thumb,
-                    opcode,
-                });
+                self.registers[15] = memory.read_u32(self.registers[13] & !3) & !1;
+                self.registers[13] = self.registers[13].wrapping_add(0x40);
+                return Ok(());
             }
             let mut address = self.registers[13];
 
@@ -2660,6 +2666,73 @@ mod tests {
     }
 
     #[test]
+    fn thumb_bx_with_rd_bits_from_rom_hack_branches_to_arm() {
+        // 0x470A (BX r1, Rd=2) stopped Pokémon Silver Moon at 0x080A19EA.
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0x470A]));
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[1] = ROM_BASE + 0x80;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert!(!cpu.is_thumb());
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x80);
+        assert_eq!(cpu.registers[2], 0);
+    }
+
+    #[test]
+    fn thumb_push_empty_list_stores_pc_and_moves_sp_down_sixteen_words() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xB400])); // PUSH {}
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[13] = 0x0300_0100;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[13], 0x0300_00C0);
+        assert_eq!(memory.read_u32(0x0300_00C0), ROM_BASE + 6);
+        assert_eq!(cpu.registers[15], ROM_BASE + 2);
+    }
+
+    #[test]
+    fn thumb_pop_empty_list_loads_pc_and_moves_sp_up_sixteen_words() {
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&program(&[0xBC00])); // POP {}
+        memory.write_u32(0x0300_0100, ROM_BASE + 0x41);
+        let mut cpu = ThumbCpu::new(ROM_BASE);
+        cpu.registers[13] = 0x0300_0100;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[13], 0x0300_0140);
+        assert_eq!(cpu.registers[15], ROM_BASE + 0x40);
+        assert!(cpu.is_thumb());
+    }
+
+    #[test]
+    fn thumb_rejects_exactly_the_armv4t_undefined_encodings() {
+        // Undefined on ARMv4T: unused B1-B3/B6-BB/BE-BF miscellaneous space, B<cond=AL> (DExx),
+        // and the ARMv5 BLX suffix (E800-EFFF). DFxx is SWI and reports BIOS errors separately.
+        let is_undefined = |opcode: u16| {
+            matches!(opcode >> 8, 0xB1..=0xB3 | 0xB6..=0xBB | 0xBE | 0xBF | 0xDE)
+                || opcode & 0xF800 == 0xE800
+        };
+        let mut memory = MemoryMap::new();
+        for opcode in 0..=u16::MAX {
+            memory.load_cartridge(&program(&[opcode, 0, 0]));
+            let mut cpu = ThumbCpu::new(ROM_BASE);
+            cpu.registers[13] = 0x0300_0100;
+
+            let rejected = matches!(
+                cpu.step(&mut memory),
+                Err(CpuError::UnsupportedInstruction { .. })
+            );
+
+            assert_eq!(rejected, is_undefined(opcode), "opcode {opcode:04X}");
+        }
+    }
+
+    #[test]
     fn thumb_bl_prefix_and_suffix_branch_and_save_return_address() {
         let mut memory = MemoryMap::new();
         memory.load_cartridge(&program(&[0xF000, 0xF802]));
@@ -3643,6 +3716,45 @@ mod tests {
             cpu.registers[0] = 0xF000_0000;
             cpu.step(&mut memory).unwrap();
             assert_eq!(cpu.cpsr & 0xF000_0000, 0xF000_0000, "opcode {opcode:08X}");
+        }
+    }
+
+    #[test]
+    fn arm_mul_ignores_sbz_rn_field() {
+        // MUL r0, r1, r2 with Rn (bits 15-12) = 15; only MLA reads Rn.
+        let mut memory = MemoryMap::new();
+        memory.load_cartridge(&arm_word(0xE000_F291));
+        let mut cpu = ThumbCpu::boot_hle();
+        cpu.registers[1] = 6;
+        cpu.registers[2] = 7;
+
+        cpu.step(&mut memory).unwrap();
+
+        assert_eq!(cpu.registers[0], 42);
+    }
+
+    #[test]
+    fn arm_swp_ignores_sbz_bits_11_to_8() {
+        // SWP r0, r1, [r2] and SWPB r0, r1, [r2] with bits 11-8 set.
+        for (opcode, expected_loaded, expected_stored) in [
+            (0xE102_0F91u32, 0x1122_3344u32, 0xAABB_CCDDu32),
+            (0xE142_0F91, 0x44, 0x1122_33DD),
+        ] {
+            let mut memory = MemoryMap::new();
+            memory.load_cartridge(&arm_word(opcode));
+            memory.write_u32(0x0300_0000, 0x1122_3344);
+            let mut cpu = ThumbCpu::boot_hle();
+            cpu.registers[1] = 0xAABB_CCDD;
+            cpu.registers[2] = 0x0300_0000;
+
+            cpu.step(&mut memory).unwrap();
+
+            assert_eq!(cpu.registers[0], expected_loaded, "opcode {opcode:08X}");
+            assert_eq!(
+                memory.read_u32(0x0300_0000),
+                expected_stored,
+                "opcode {opcode:08X}"
+            );
         }
     }
 
