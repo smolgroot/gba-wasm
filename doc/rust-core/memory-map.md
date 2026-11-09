@@ -1,6 +1,6 @@
 # Memory Map
 
-`MemoryMap` (`rust/src/memory.rs`) decodes every CPU and DMA access to the GBA's memory regions, I/O registers, and cartridge.
+`MemoryMap` (`rust/src/memory/`, with DMA in `dma.rs` and timers in `timers.rs`) decodes every CPU and DMA access to the GBA's memory regions, I/O registers, and cartridge.
 
 ## Regions
 
