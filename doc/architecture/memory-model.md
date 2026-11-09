@@ -1,6 +1,6 @@
 # Memory Model
 
-The Game Boy Advance memory map is the foundation that the CPU, DMA, and devices share. `MemoryMap` (`rust/src/memory.rs`) owns every region as a byte array and routes each access by address. The address-level details are in [Memory Map](../rust-core/memory-map.md).
+The Game Boy Advance memory map is the foundation that the CPU, DMA, and devices share. `MemoryMap` (`rust/src/memory/`) owns every region as a byte array and routes each access by address. The address-level details are in [Memory Map](../rust-core/memory-map.md).
 
 ## Regions
 

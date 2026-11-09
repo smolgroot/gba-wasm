@@ -83,9 +83,9 @@ flowchart TB
   JS(["JavaScript (wasmBridge.ts)"]) --> WE["WasmEmulator<br/>lib.rs · #[wasm_bindgen]"]
   WE --> Core["GbaCore<br/>step_frame · save_state / load_state"]
   Core --> Intro["BootIntro<br/>boot_intro.rs · boot_logo.rs<br/>(optional, before the cartridge)"]
-  Core --> CPU["ThumbCpu<br/>cpu.rs<br/>ARM + Thumb interpreter, HLE SWI services"]
+  Core --> CPU["ThumbCpu<br/>cpu/<br/>ARM + Thumb interpreter, HLE SWI services"]
   Core --> GPU["GpuCore<br/>gpu.rs<br/>scanline renderer → RGBA framebuffer"]
-  Core --> Mem["MemoryMap<br/>memory.rs<br/>bus, I/O registers, video clock"]
+  Core --> Mem["MemoryMap<br/>memory/<br/>bus, I/O registers, video clock"]
   CPU -- "read / write<br/>advance_video_cycles" --> Mem
   GPU -. "reads VRAM, palette,<br/>OAM, display I/O" .-> Mem
 
@@ -161,9 +161,9 @@ The Rust crate owns simulation correctness: reading and writing memory, processi
 | Module | Responsibility | Docs |
 | --- | --- | --- |
 | `lib.rs` | `GbaCore` (frame stepping, save states) and the `wasm_bindgen` exports | [WASM Boundary](./wasm-boundary.md) |
-| `cpu.rs` | ARM7TDMI interpreter and HLE BIOS services | [ARM7TDMI CPU](../rust-core/thumb-cpu.md), [HLE BIOS](../rust-core/bios.md) |
+| `cpu/` | ARM7TDMI interpreter (`mod.rs` core state, `arm.rs`, `thumb.rs`, `alu.rs` flags and shifter) and HLE BIOS services (`bios_hle.rs`) | [ARM7TDMI CPU](../rust-core/thumb-cpu.md), [HLE BIOS](../rust-core/bios.md) |
 | `bios.rs` | Generated BIOS image: vectors and IRQ dispatcher | [HLE BIOS](../rust-core/bios.md) |
-| `memory.rs` | Bus, I/O registers, timers, DMA, and the video clock | [Memory Map](../rust-core/memory-map.md) |
+| `memory/` | Bus, I/O registers, and the video clock (`mod.rs`), DMA (`dma.rs`), and timers (`timers.rs`) | [Memory Map](../rust-core/memory-map.md) |
 | `cartridge.rs` | Cartridge header validation | [Memory Map](../rust-core/memory-map.md) |
 | `backup.rs` | SRAM, Flash, and EEPROM save memory | [Memory Map](../rust-core/memory-map.md#cartridge-backup) |
 | `gpu.rs` | Scanline renderer | [GPU Core](../rust-core/gpu-core.md) |

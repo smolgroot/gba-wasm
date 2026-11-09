@@ -1,6 +1,6 @@
 # ARM7TDMI CPU
 
-The CPU is an ARMv4T interpreter (`ThumbCpu` in `rust/src/cpu.rs`) with a high-level-emulated (HLE) BIOS. It passes the ARM and Thumb suites from [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (see [Testing Strategy](./testing-strategy.md)); that is evidence of instruction-level correctness, not of compatibility with any particular game.
+The CPU is an ARMv4T interpreter (`ThumbCpu` in `rust/src/cpu/`: `mod.rs` holds the core state and stepping, `arm.rs` and `thumb.rs` the two instruction sets, `alu.rs` the flags and shifter, and `bios_hle.rs` the SWI services) with a high-level-emulated (HLE) BIOS. It passes the ARM and Thumb suites from [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (see [Testing Strategy](./testing-strategy.md)); that is evidence of instruction-level correctness, not of compatibility with any particular game.
 
 ## Boot
 
