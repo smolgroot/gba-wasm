@@ -29,7 +29,7 @@ Wait states, the prefetch buffer, serial/link hardware, the cartridge RTC and ot
 
 ## Roadmap
 
-Work the stories in this order. Measurement comes before timing work: wait states and the prefetch buffer change every game's behavior and cost performance, so the mgba-suite score (TEST-01), the local smoke run (COMPAT-02), and a performance baseline (PERF-01) must exist first to show whether a change helps or regresses.
+Work the stories in this order. Measurement comes before timing work: wait states and the prefetch buffer change every game's behavior and cost performance, so the mgba-suite score (TEST-01, done), the local smoke run (COMPAT-02), and a performance baseline (PERF-01) must exist first to show whether a change helps or regresses.
 
 | Order | Story | Priority | Why now |
 | --- | --- | --- | --- |
@@ -367,7 +367,7 @@ Thumb `BX` ignores H1 and Rd (including `0x470A`). ARM `BX`/`MRS`/`MSR`/`SWP` an
 
 ### TEST-01: Run the mGBA test suite in `cargo test`
 
-**Status:** `NEXT`
+**Status:** `DONE`
 **Priority:** `P1`
 **Depends on:** ROM-02
 
@@ -383,9 +383,11 @@ Acceptance criteria:
 - Commit the current per-suite pass counts as the baseline. The test fails when a count drops below its baseline and prints a reminder to raise the baseline when it rises, so the suite is a ratchet rather than all-or-nothing.
 - Document the harness, the baseline, and the suites that cannot pass under HLE (BIOS-dependent values) in [Testing Strategy](doc/rust-core/testing-strategy.md).
 
+`rust/tests/mgba_suite.rs` scores 13 of the 14 suites against committed baselines ([Testing Strategy](doc/rust-core/testing-strategy.md#mgba-suite)); the debug-log device is documented in [Memory Map](doc/rust-core/memory-map.md#mgba-debug-log). The Video suite has no automatic run and reports no count, so it is not scored. The BIOS math suite ends in an `UnsupportedBiosCall` on `Div` by zero and scores 0 until BIOS-02 decides that case. The ROM was built from commit `e694203` with the devkitARM image, as the README records; `docker-build.sh` itself also runs `git fetch --unshallow`, `zip`, and `make clean`, which are not needed for the binary.
+
 ### COMPAT-02: Local smoke run over a ROM directory
 
-**Status:** `BACKLOG`
+**Status:** `NEXT`
 **Priority:** `P1`
 **Depends on:** ROM-02
 

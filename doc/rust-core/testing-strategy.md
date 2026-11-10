@@ -21,6 +21,34 @@ Two generated fixtures in `rust/src/lib.rs` exercise the boot path. `generated_a
 
 `bios.gba` is not vendored. It checks values read from the real BIOS image, which an HLE BIOS cannot reproduce.
 
+## mGBA suite
+
+`rust/tests/mgba_suite.rs` scores [mgba-emu/suite](https://github.com/mgba-emu/suite) (MIT; commit `e694203`). The binary, license, and the exact build command are in `rust/tests/fixtures/mgba-suite/`. The project publishes no release, so the ROM is built with its devkitARM Docker image. The baselines apply to the vendored binary.
+
+The ROM has a menu and no run-all mode. For each suite the harness boots a fresh core with the opt-in [mGBA debug-log device](./memory-map.md#mgba-debug-log) enabled, presses DOWN to reach the suite and A to run it, and steps frames until the suite logs `END: <passed>/<total>`. Every suite finishes within about 220 frames; the budget is 1,000 and the whole file takes seconds in release mode. Each suite is its own `#[test]`.
+
+The counts are a ratchet. A suite fails when its count drops below its `baseline` in the table at the top of the file, and when the total it reports changes. When a count rises, the test prints a reminder (visible with `--nocapture`); raise the baseline in the same change that improved it. A suite that ends in a core error or never logs `END:` scores 0, and the output names the error.
+
+| Suite | Baseline | Total | Notes |
+| --- | ---: | ---: | --- |
+| Memory | 1344 | 1552 | |
+| I/O read | 52 | 130 | |
+| Timing | 310 | 2020 | Needs wait states (TIME-02) and the prefetch buffer (TIME-03). |
+| Timer count-up | 353 | 936 | |
+| Timer IRQ | 0 | 90 | |
+| Shifter | 140 | 140 | |
+| Carry | 93 | 93 | |
+| Multiply long | 52 | 72 | |
+| BIOS math | 0 | 615 | Stops at `Div` by zero (`unsupported BIOS SWI 0x06`), a decision BIOS-02 records. Total counted from the source. |
+| DMA | 1092 | 1244 | |
+| SIO register R/W | 65 | 90 | |
+| SIO timing | 0 | 4 | Serial hardware is not implemented (LINK-01). |
+| Misc. edge case | 3 | 12 | |
+
+The suite's last menu entry, Video, has no automatic run: it logs nothing and reports no count, so it is not scored. Its screens can only be judged by eye.
+
+Reasons for individual failures have not been triaged; a suite that fails here is a lead, not a diagnosis. The suite checks some values only the real BIOS produces, so a full score is not expected under HLE.
+
 ## Robustness
 
 The release build aborts on panic, which kills the WASM instance, so hostile input must only ever produce errors. `rust/tests/robustness.rs` drives the core with seeded pseudo-random input: random code behind a valid header, random I/O and memory writes, and truncated or corrupted save states. Any panic fails the test with its seed. For a deeper search, scale the case counts and enable overflow checks:
