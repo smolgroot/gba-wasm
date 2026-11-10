@@ -17,7 +17,7 @@
 
 <hr />
 
-> **Note:** This project is in active development. The CPU passes the jsmolka/gba-tests ARM, Thumb, and memory suites, and the core renders all display modes, plays audio, and emulates cartridge saves, but accuracy varies by game. See [TASKS.md](TASKS.md) for what is missing.
+> **Note:** This project is in active development. The CPU passes the jsmolka/gba-tests ARM, Thumb, and memory suites, and the core renders all display modes, plays audio, and emulates cartridge saves, but accuracy varies by game. Accuracy work is measured against the [mGBA test suite](https://github.com/mgba-emu/suite), scored per suite in `cargo test` (see [Testing Strategy](doc/rust-core/testing-strategy.md#mgba-suite)). See [TASKS.md](TASKS.md) for what is missing.
 
 ## Documentation
 

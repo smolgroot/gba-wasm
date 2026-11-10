@@ -149,19 +149,24 @@ use crate::apu::Apu;
 use crate::backup::{Backup, BackupKind};
 use crate::state::impl_state;
 
+mod debug_log;
 mod dma;
 mod timers;
 
+pub use debug_log::{
+    DEBUG_LOG_BASE, DEBUG_LOG_END, DebugLog, DebugLogLine, LOG_DEBUG, LOG_ERROR, LOG_FATAL,
+    LOG_INFO, LOG_WARN,
+};
 use dma::DmaChannel;
 use timers::Timer;
 
 // The BIOS image and ROM are not state; held keys stay live; the volatile-read flag only
-// feeds the idle-loop detector. The fetch address is set again by the next instruction, and
+// feeds the idle-loop detector. The debug log is a host-owned test device. The fetch address is set again by the next instruction, and
 // the BIOS latch is left out so states from before it was modeled still load.
 impl_state!(MemoryMap {
     backup, apu, ewram, iwram, vram, oam, palette, io, video_cycles, vblanks_started, timers,
     dma, affine_reference_writes,
-} skip { bios, cartridge, pressed_keys, volatile_read, fetch, bios_latch });
+} skip { bios, cartridge, pressed_keys, volatile_read, fetch, bios_latch, debug_log });
 
 #[derive(Debug, Clone)]
 pub struct MemoryMap {
@@ -189,6 +194,8 @@ pub struct MemoryMap {
     fetch: OpcodeFetch,
     /// Last opcode fetched from the BIOS. Reads of the BIOS from outside it return this.
     bios_latch: u32,
+    /// Opt-in mGBA debug-log registers for test harnesses; off by default.
+    debug_log: DebugLog,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,6 +229,7 @@ impl MemoryMap {
                 thumb: false,
             },
             bios_latch: BIOS_LATCH_AFTER_BOOT,
+            debug_log: DebugLog::new(),
         };
         memory.reset_io_registers();
         memory
@@ -328,6 +336,22 @@ impl MemoryMap {
             self.dma = [DmaChannel::default(); 4];
             self.affine_reference_writes = [true; 2];
         }
+    }
+
+    /// Turns the mGBA debug-log registers on or off. They are off by default, and while off
+    /// their addresses are unmapped. A ROM still has to complete the enable handshake.
+    pub fn set_debug_log_enabled(&mut self, enabled: bool) {
+        self.debug_log.set_available(enabled);
+    }
+
+    /// Removes and returns the messages the ROM emitted through the debug-log registers.
+    pub fn take_debug_log(&mut self) -> Vec<DebugLogLine> {
+        self.debug_log.take_lines()
+    }
+
+    /// Forgets the ROM's debug-log handshake and undrained lines, keeping the host setting.
+    pub fn reset_debug_log(&mut self) {
+        self.debug_log.reset();
     }
 
     /// EEPROM occupies the top ROM window: all of `0x0D000000`-`0x0DFFFFFF` for ROMs up to
@@ -645,6 +669,10 @@ impl MemoryMap {
                 self.cartridge.get(offset).copied().unwrap_or(0xFF)
             }
             BACKUP_START..=0x0FFF_FFFF => self.backup.read((addr & BACKUP_WINDOW_MASK) as usize),
+            DEBUG_LOG_BASE..=DEBUG_LOG_END => self
+                .debug_log
+                .read(addr)
+                .unwrap_or_else(|| self.open_bus_u8(addr)),
             _ => self.open_bus_u8(addr),
         }
     }
@@ -703,6 +731,7 @@ impl MemoryMap {
             BACKUP_START..=0x0FFF_FFFF => self
                 .backup
                 .write((addr & BACKUP_WINDOW_MASK) as usize, value),
+            DEBUG_LOG_BASE..=DEBUG_LOG_END => self.debug_log.write(addr, value),
             _ => {}
         }
     }
@@ -1015,5 +1044,31 @@ mod tests {
         assert_eq!(memory.read_u16(IF_ADDR), 0);
         memory.set_pressed_keys(0b11);
         assert_eq!(memory.read_u16(IF_ADDR), 1 << 12);
+    }
+
+    #[test]
+    fn debug_log_registers_are_unmapped_unless_the_host_enables_them() {
+        let untouched = MemoryMap::new();
+        let open_bus = untouched.read_u16(0x04FF_F780);
+        let mut memory = MemoryMap::new();
+        memory.write_u16(0x04FF_F780, 0xC0DE);
+        assert_eq!(memory.read_u16(0x04FF_F780), open_bus);
+
+        memory.set_debug_log_enabled(true);
+        assert_eq!(memory.read_u16(0x04FF_F780), open_bus);
+        memory.write_u16(0x04FF_F780, 0xC0DE);
+        assert_eq!(memory.read_u16(0x04FF_F780), 0x1DEA);
+
+        for (offset, byte) in b"hi\0".iter().enumerate() {
+            memory.write_u8(0x04FF_F600 + offset as u32, *byte);
+        }
+        memory.write_u16(0x04FF_F700, 0x0100 | u16::from(LOG_DEBUG));
+        assert_eq!(
+            memory.take_debug_log(),
+            vec![DebugLogLine {
+                level: LOG_DEBUG,
+                text: "hi".into()
+            }]
+        );
     }
 }

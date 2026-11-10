@@ -15,7 +15,7 @@ pub use cartridge::{CartridgeError, CartridgeHeader, MAX_ROM_SIZE};
 pub use cpu::{CpuError, ExecutionState, MAX_FRAME_INSTRUCTIONS, ROM_BASE, ThumbCpu};
 pub use gpu::{GpuCore, SCREEN_HEIGHT, SCREEN_WIDTH};
 pub use memory::{
-    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, DMA0_ADDR,
+    CYCLES_PER_FRAME, CYCLES_PER_SCANLINE, DISPCNT_ADDR, DISPSTAT_ADDR, DMA0_ADDR, DebugLogLine,
     HBLANK_START_CYCLE, IE_ADDR, IF_ADDR, IME_ADDR, KEYCNT_ADDR, KEYINPUT_ADDR, MemoryMap,
     SCANLINES_PER_FRAME, TIMER0_ADDR, VCOUNT_ADDR, VISIBLE_SCANLINES, WAITCNT_ADDR,
 };
@@ -88,6 +88,17 @@ impl GbaCore {
         self.memory.set_pressed_keys(pressed);
     }
 
+    /// Turns the mGBA debug-log registers on for test harnesses (off by default). The
+    /// browser build never calls this.
+    pub fn set_debug_log_enabled(&mut self, enabled: bool) {
+        self.memory.set_debug_log_enabled(enabled);
+    }
+
+    /// Removes and returns the debug-log lines the ROM has emitted since the last call.
+    pub fn take_debug_log(&mut self) -> Vec<DebugLogLine> {
+        self.memory.take_debug_log()
+    }
+
     pub fn advance_video_cycles(&mut self, cycles: u32) {
         self.memory.advance_video_cycles(cycles);
     }
@@ -96,6 +107,7 @@ impl GbaCore {
         CartridgeHeader::parse(rom)?;
         self.memory.load_cartridge(rom);
         self.memory.reset_io_registers();
+        self.memory.reset_debug_log();
         self.memory.reset_video_clock();
         self.cpu = ThumbCpu::boot_hle();
         self.boot_intro = None;
